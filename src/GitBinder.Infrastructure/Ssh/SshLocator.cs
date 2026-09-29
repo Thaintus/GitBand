@@ -1,30 +1,28 @@
 using GitBinder.Application.Security;
+using GitBinder.Infrastructure.Common;
 
 namespace GitBinder.Infrastructure.Ssh;
 
 /// <summary>
-/// SSH 定位器（Windows V1）。
+/// SSH 定位器，支持 Windows OpenSSH、macOS 系统及 Homebrew 安装。
 /// </summary>
 public sealed class SshLocator : ISshLocator
 {
     public async Task<string?> LocateAsync(CancellationToken ct = default)
     {
         await Task.CompletedTask;
+        ct.ThrowIfCancellationRequested();
 
-        // PATH 中的 ssh.exe。
-        var paths = Environment.GetEnvironmentVariable("PATH")?.Split(Path.PathSeparator) ?? [];
-        foreach (var dir in paths)
+        var onPath = ExecutableDiscovery.FindOnPath(OperatingSystem.IsWindows() ? "ssh.exe" : "ssh");
+        if (onPath is not null) return onPath;
+
+        if (!OperatingSystem.IsWindows())
         {
-            if (string.IsNullOrWhiteSpace(dir))
+            foreach (var candidate in new[] { "/usr/bin/ssh", "/opt/homebrew/bin/ssh", "/usr/local/bin/ssh" })
             {
-                continue;
+                if (ExecutableDiscovery.IsExecutable(candidate)) return candidate;
             }
-
-            var candidate = Path.Combine(dir, "ssh.exe");
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
+            return null;
         }
 
         // 常见 OpenSSH 安装目录。
@@ -42,7 +40,7 @@ public sealed class SshLocator : ISshLocator
 
         foreach (var candidate in candidates)
         {
-            if (File.Exists(candidate))
+            if (ExecutableDiscovery.IsExecutable(candidate))
             {
                 return candidate;
             }

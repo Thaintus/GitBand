@@ -13,6 +13,16 @@ using GitBinder.Domain.Projects;
 
 namespace GitBinder.Tests.Fakes;
 
+/// <summary>测试私钥导入端口；不复制或读取真实私钥文件。</summary>
+public sealed class FakePrivateKeyImporter : GitBinder.Application.Common.IPrivateKeyImporter
+{
+    public Task<string> ImportAsync(string sourcePath, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(sourcePath + ".imported");
+    }
+}
+
 /// <summary>内存账号仓储。</summary>
 public sealed class FakeAccountRepository : IAccountRepository, GitBinder.Domain.Services.IAccountReader
 {
@@ -326,6 +336,12 @@ public sealed class FakeGitConfigApplier : IGitConfigApplier
     public (string Name, string Email) AppliedIdentity { get; private set; }
     public string AppliedSshCommand { get; private set; } = string.Empty;
     public Guid? AppliedCredentialAccountId { get; private set; }
+
+    public string BuildSshCommand(Account account)
+        => account.AuthenticationType is AuthenticationType.Ssh or AuthenticationType.Both
+            && !string.IsNullOrWhiteSpace(account.SshPrivateKeyPath)
+            ? $"ssh -i \"{account.SshPrivateKeyPath}\" -o IdentitiesOnly=yes"
+            : "ssh -F NUL -i NUL -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no";
 
     public Task<(string Name, string Email)> ReadIdentityAsync(string repositoryPath, CancellationToken ct = default)
         => Task.FromResult((StoredName, StoredEmail));

@@ -244,7 +244,7 @@ public sealed class AccountEmailSaveTests
                 new FakeSnapshotRepository(), new FakeGitTransfer(), resolver);
             var globalService = new GlobalModeService(Settings, Accounts, bindingService, GlobalConfig);
             ViewModel = new AccountEditViewModel(
-                new AccountService(Accounts, new BindingDeletionGuard(Bindings), new SecretService(secrets), new UnusedDataPath()),
+                new AccountService(Accounts, new BindingDeletionGuard(Bindings), new SecretService(secrets), new FakePrivateKeyImporter()),
                 new PlatformService(new EmptyPlatformRepository(), Settings),
                 new KeyLocalization(),
                 () => Task.FromResult<string?>(null),

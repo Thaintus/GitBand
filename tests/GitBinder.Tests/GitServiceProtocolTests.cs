@@ -101,10 +101,11 @@ public sealed class GitServiceProtocolTests
     {
         Assert.Equal(RepositoryPath, path);
         Assert.Equal(TimeSpan.FromSeconds(60), options.Timeout);
-        Assert.Contains("core.hooksPath=NUL", args);
+        var nullDevice = OperatingSystem.IsWindows() ? "NUL" : "/dev/null";
+        Assert.Contains($"core.hooksPath={nullDevice}", args);
         Assert.Contains("protocol.allow=never", args);
         Assert.Contains("core.askPass=", args);
-        Assert.Equal("NUL", options.Environment["GIT_CONFIG_GLOBAL"]);
+        Assert.Equal(nullDevice, options.Environment["GIT_CONFIG_GLOBAL"]);
         Assert.Equal("1", options.Environment["GIT_CONFIG_NOSYSTEM"]);
         Assert.Equal("0", options.Environment["GIT_CONFIG_COUNT"]);
         Assert.Equal("", options.Environment["GIT_CONFIG_PARAMETERS"]);

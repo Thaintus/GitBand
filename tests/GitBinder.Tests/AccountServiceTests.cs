@@ -13,8 +13,33 @@ public class AccountServiceTests
         var bindingRepo = new FakeBindingRepository();
         var secretStore = new FakeSecretStore();
         var secretService = new SecretService(secretStore);
-        var service = new AccountService(accountRepo, new Guard(bindingRepo), secretService, new FakeDataPath());
+        var service = new AccountService(accountRepo, new Guard(bindingRepo), secretService, new FakePrivateKeyImporter());
         return (service, accountRepo, bindingRepo, secretStore);
+    }
+
+    [Fact]
+    public async Task ImportPrivateKey_MissingSource_ReturnsFailure()
+    {
+        var (service, _, _, _) = CreateSut();
+        var missing = Path.Combine(Path.GetTempPath(), "gitbinder-missing-key-" + Guid.NewGuid().ToString("N"));
+        var result = await service.ImportPrivateKeyAsync(missing);
+        Assert.False(result.IsSuccess);
+        Assert.Equal("ACCOUNT_KEY_NOT_FOUND", result.Error!.Code);
+    }
+
+    [Fact]
+    public async Task ImportPrivateKey_PermissionFailure_ReturnsReadableError()
+    {
+        var source = Path.GetTempFileName();
+        try
+        {
+            var service = new AccountService(new FakeAccountRepository(), new Guard(new FakeBindingRepository()),
+                new SecretService(new FakeSecretStore()), new DeniedKeyImporter());
+            var result = await service.ImportPrivateKeyAsync(source);
+            Assert.False(result.IsSuccess);
+            Assert.Equal("ACCOUNT_KEY_IMPORT_FAILED", result.Error!.Code);
+        }
+        finally { File.Delete(source); }
     }
 
     [Fact]
@@ -153,14 +178,9 @@ public class AccountServiceTests
             => _bindingRepo.CountByAccountIdAsync(accountId, ct);
     }
 
-    private sealed class FakeDataPath : GitBinder.Application.Common.IApplicationDataPath
+    private sealed class DeniedKeyImporter : GitBinder.Application.Common.IPrivateKeyImporter
     {
-        public string DataDirectory { get; } = Path.Combine(Path.GetTempPath(), "gitbinder-test");
-
-        public string DatabasePath => Path.Combine(DataDirectory, "gitbinder.db");
-
-        public string LogDirectory => Path.Combine(DataDirectory, "logs");
-
-        public string KeysDirectory => Path.Combine(DataDirectory, "keys");
+        public Task<string> ImportAsync(string sourcePath, CancellationToken ct = default)
+            => throw new UnauthorizedAccessException("permission denied");
     }
 }

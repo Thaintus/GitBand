@@ -1,3 +1,4 @@
+using GitBinder.Domain.Accounts;
 using GitBinder.Domain.GlobalMode;
 
 namespace GitBinder.Application.Git;
@@ -8,6 +9,9 @@ namespace GitBinder.Application.Git;
 /// </summary>
 public interface IGitConfigApplier
 {
+    /// <summary>构造平台适配的 SSH 命令；账号无 SSH 私钥时禁止回退到其他密钥。</summary>
+    string BuildSshCommand(Account account);
+
     /// <summary>读取当前仓库用户身份。</summary>
     Task<(string Name, string Email)> ReadIdentityAsync(string repositoryPath, CancellationToken ct = default);
 

@@ -202,6 +202,7 @@ internal static class StringsEnUs
         ["Accounts.AliasDefaultToName"] = "Defaults to commit name, editable",
         ["ACCOUNT_NAME_REQUIRED"] = "Commit name is required.",
         ["ACCOUNT_KEY_NOT_FOUND"] = "Private key file not found: {0}.",
+        ["ACCOUNT_KEY_IMPORT_FAILED"] = "Could not import private key: {0}",
 
         ["Platforms.Title"] = "Platforms",
         ["Platforms.Description"] = "Manage Git hosting platform names and hosts. The account platform dropdown reads this list.",

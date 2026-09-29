@@ -8,7 +8,7 @@ using GitBinder.Infrastructure.Common;
 namespace GitBinder.Infrastructure.Git;
 
 /// <summary>
-/// Git 定位器，仅支持 Windows（V1）。
+/// Git 定位器，支持用户设置、系统 PATH 及 Windows / macOS 常见安装目录。
 /// </summary>
 public sealed class GitLocator : IGitLocator
 {
@@ -23,31 +23,23 @@ public sealed class GitLocator : IGitLocator
     {
         // 1. 用户设置。
         var configured = await _settings.GetAsync("git.executable", ct);
-        if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
+        ct.ThrowIfCancellationRequested();
+        if (!string.IsNullOrWhiteSpace(configured) && ExecutableDiscovery.IsExecutable(configured))
         {
             return configured;
         }
 
         // 2. PATH。
-        var paths = Environment.GetEnvironmentVariable("PATH")?.Split(Path.PathSeparator) ?? [];
-        foreach (var dir in paths)
+        var onPath = ExecutableDiscovery.FindOnPath(OperatingSystem.IsWindows() ? "git.exe" : "git");
+        if (onPath is not null)
         {
-            if (string.IsNullOrWhiteSpace(dir))
-            {
-                continue;
-            }
-
-            var candidate = Path.Combine(dir, "git.exe");
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
+            return onPath;
         }
 
         // 3. 常见安装目录。
         foreach (var common in CommonLocations())
         {
-            if (File.Exists(common))
+            if (ExecutableDiscovery.IsExecutable(common))
             {
                 return common;
             }
@@ -58,6 +50,15 @@ public sealed class GitLocator : IGitLocator
 
     private static IEnumerable<string> CommonLocations()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            // Finder 启动不会读取 zsh/bash 登录配置，显式包含两种架构的 Homebrew 与系统 Git。
+            yield return "/opt/homebrew/bin/git";
+            yield return "/usr/local/bin/git";
+            yield return "/usr/bin/git";
+            yield break;
+        }
+
         foreach (var folder in new[] { Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86 })
         {
             var programFiles = Environment.GetFolderPath(folder);
@@ -69,7 +70,7 @@ public sealed class GitLocator : IGitLocator
         var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         if (!string.IsNullOrEmpty(localAppData))
         {
-            yield return Path.Combine(localAppData, "Programs\\Git\\cmd\\git.exe");
+            yield return Path.Combine(localAppData, "Programs", "Git", "cmd", "git.exe");
         }
     }
 }

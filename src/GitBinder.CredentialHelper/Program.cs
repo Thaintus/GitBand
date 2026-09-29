@@ -12,7 +12,7 @@ namespace GitBinder.CredentialHelper;
 /// <summary>
 /// Git Credential Helper：实现 Git Credential Protocol，从 Secret Store 提供 HTTPS 认证数据。
 /// 用法（由 GUI 写入仓库 config）：
-///   credential.helper = "!&lt;绝对路径&gt;/gitbinder-credential.exe --account-id &lt;账号 Id&gt;"
+///   credential.helper = "!&lt;绝对路径&gt;/gitbinder-credential[.exe] --account-id &lt;账号 Id&gt;"
 /// 指定账号时不按主机或默认账号回退，确保认证与当前选中的账号一致。
 /// </summary>
 internal static class Program
@@ -144,13 +144,12 @@ internal static class Program
 
     private static (IServiceProvider, IAccountRepository, ISecretStore) Build()
     {
-        var baseDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var dataDirectory = Path.Combine(baseDir, "GitBinder");
-        var databasePath = Path.Combine(dataDirectory, "gitbinder.db");
+        // 必须与桌面端共享平台路径；macOS 使用 Library/Application Support。
+        var dataPath = PlatformPaths.CreateApplicationDataPath();
 
         var services = new ServiceCollection();
         services.AddApplication();
-        services.AddInfrastructure(databasePath);
+        services.AddInfrastructure(dataPath.DatabasePath);
         services.AddPlatform();
 
         var provider = services.BuildServiceProvider();

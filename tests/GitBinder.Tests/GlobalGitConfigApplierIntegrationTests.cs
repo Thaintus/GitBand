@@ -46,7 +46,9 @@ public sealed class GlobalGitConfigApplierIntegrationTests
             Assert.True(applied.IsSuccess);
             Assert.Equal(target.GitName, current.UserName);
             Assert.Equal(target.GitEmail, current.UserEmail);
-            Assert.Contains(target.SshPrivateKeyPath, current.SshCommand ?? string.Empty);
+            var expectedKeyPath = OperatingSystem.IsWindows()
+                ? target.SshPrivateKeyPath.Replace('\\', '/') : target.SshPrivateKeyPath;
+            Assert.Contains(expectedKeyPath, current.SshCommand ?? string.Empty);
 
             var restored = await applier.RestoreAsync(snapshot);
             var afterRestore = await applier.CaptureAsync();

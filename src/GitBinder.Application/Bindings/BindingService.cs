@@ -369,15 +369,8 @@ public sealed partial class BindingService : IGlobalModeApplier
             return string.Empty;
         }
 
-        if (account.AuthenticationType is AuthenticationType.Ssh or AuthenticationType.Both
-            && !string.IsNullOrWhiteSpace(account.SshPrivateKeyPath))
-        {
-            return $"ssh -i \"{account.SshPrivateKeyPath}\" -o IdentitiesOnly=yes";
-        }
-
-        // 没有为所选账号配置 SSH 私钥时，显式关闭 Agent 与交互式认证，避免 Git
-        // 回退到开发机的默认密钥或 SSH Agent 中其他平台的密钥。
-        return "ssh -F NUL -i NUL -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no";
+        // 平台路径、空设备及 Shell 转义交给 Git 适配层，绑定用例只决定是否应用 SSH。
+        return _gitConfigApplier.BuildSshCommand(account);
     }
 
     private RemoteProtocol GetRemoteProtocol(Project project)

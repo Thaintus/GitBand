@@ -245,7 +245,7 @@ public sealed class AccountEditViewModelTests
 
     private static AccountEditViewModel CreateViewModel(FakeAccountRepository accounts, ISecretStore secrets)
         => new(
-            new AccountService(accounts, new DeletionGuard(), new SecretService(secrets), new TestDataPath()),
+            new AccountService(accounts, new DeletionGuard(), new SecretService(secrets), new FakePrivateKeyImporter()),
             new PlatformService(new EmptyPlatformRepository(), new FakeSettingsRepository()),
             new TestLocalization(),
             () => Task.FromResult<string?>(null));

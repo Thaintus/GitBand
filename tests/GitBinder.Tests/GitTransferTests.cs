@@ -42,7 +42,7 @@ public sealed class GitTransferTests : IDisposable
         Assert.DoesNotContain(call.Args, arg => arg.Contains(account.HttpsSecretId));
         Assert.Contains("--no-recurse-submodules", call.Args);
         Assert.Equal("0", call.Options.Environment["GIT_TERMINAL_PROMPT"]);
-        Assert.Equal("NUL", call.Options.Environment["GIT_CONFIG_GLOBAL"]);
+        Assert.Equal(OperatingSystem.IsWindows() ? "NUL" : "/dev/null", call.Options.Environment["GIT_CONFIG_GLOBAL"]);
         Assert.Null(call.Options.Environment["GIT_DIR"]);
         Assert.Equal(TimeSpan.FromMinutes(30), call.Options.Timeout);
     }
@@ -172,7 +172,7 @@ public sealed class GitTransferTests : IDisposable
             Assert.Equal("Never", call.Options.Environment["GCM_INTERACTIVE"]);
             Assert.Equal("", call.Options.Environment["GIT_ASKPASS"]);
             Assert.Equal("", call.Options.Environment["SSH_ASKPASS"]);
-            Assert.Equal("NUL", call.Options.Environment["GIT_CONFIG_GLOBAL"]);
+            Assert.Equal(OperatingSystem.IsWindows() ? "NUL" : "/dev/null", call.Options.Environment["GIT_CONFIG_GLOBAL"]);
             Assert.Equal("1", call.Options.Environment["GIT_CONFIG_NOSYSTEM"]);
             Assert.Equal("0", call.Options.Environment["GIT_CONFIG_COUNT"]);
             Assert.Equal("", call.Options.Environment["GIT_CONFIG_PARAMETERS"]);

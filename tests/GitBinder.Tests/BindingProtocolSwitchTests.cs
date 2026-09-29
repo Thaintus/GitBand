@@ -375,6 +375,7 @@ public class BindingProtocolSwitchTests
     {
         public FakeGitConfigApplier Inner { get; } = new();
         public bool FailNextSshApply { get; set; }
+        public string BuildSshCommand(Account account) => Inner.BuildSshCommand(account);
         public Task<(string Name, string Email)> ReadIdentityAsync(string path, CancellationToken ct = default) => Inner.ReadIdentityAsync(path, ct);
         public Task<GitEmailConfigSnapshot> ReadEmailConfigAsync(string path, CancellationToken ct = default) => Inner.ReadEmailConfigAsync(path, ct);
         public Task<string> ReadSshCommandAsync(string path, CancellationToken ct = default) => Inner.ReadSshCommandAsync(path, ct);

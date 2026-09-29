@@ -13,18 +13,18 @@ public sealed class AccountService
     private readonly IAccountRepository _repository;
     private readonly IAccountDeletionGuard _deletionGuard;
     private readonly SecretService _secretService;
-    private readonly IApplicationDataPath _dataPath;
+    private readonly IPrivateKeyImporter _privateKeyImporter;
 
     public AccountService(
         IAccountRepository repository,
         IAccountDeletionGuard deletionGuard,
         SecretService secretService,
-        IApplicationDataPath dataPath)
+        IPrivateKeyImporter privateKeyImporter)
     {
         _repository = repository;
         _deletionGuard = deletionGuard;
         _secretService = secretService;
-        _dataPath = dataPath;
+        _privateKeyImporter = privateKeyImporter;
     }
 
     /// <summary>导入 SSH 私钥：复制到应用 keys 目录并返回新路径，便于后续读取。</summary>
@@ -35,13 +35,15 @@ public sealed class AccountService
             return Result<string>.Failure(new DomainError("ACCOUNT_KEY_NOT_FOUND", sourcePath));
         }
 
-        var keysDir = _dataPath.KeysDirectory;
-        Directory.CreateDirectory(keysDir);
-
-        var dest = Path.Combine(keysDir, Guid.NewGuid().ToString("N") + Path.GetExtension(sourcePath));
-        await Task.Run(() => File.Copy(sourcePath, dest, overwrite: true), ct);
-
-        return Result<string>.Success(dest);
+        try
+        {
+            var dest = await _privateKeyImporter.ImportAsync(sourcePath, ct);
+            return Result<string>.Success(dest);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Result<string>.Failure(new DomainError("ACCOUNT_KEY_IMPORT_FAILED", ex.Message));
+        }
     }
 
     public Task<IReadOnlyList<Account>> GetAllAsync(CancellationToken ct = default)

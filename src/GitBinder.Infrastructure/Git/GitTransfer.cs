@@ -120,7 +120,7 @@ public sealed class GitTransfer(ICommandExecutor executor, IGitLocator locator, 
 
     internal static List<string> BaseArguments() =>
     [
-        "-c", "core.hooksPath=NUL", "-c", "core.fsmonitor=false", "-c", "submodule.recurse=false",
+        "-c", $"core.hooksPath={GitCommandPaths.NullDevice}", "-c", "core.fsmonitor=false", "-c", "submodule.recurse=false",
         "-c", "merge.autoStash=false", "-c", "rebase.autoStash=false",
         "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "protocol.ssh.allow=always",
         "-c", "core.askPass=", "-c", "credential.interactive=false", "-c", "http.followRedirects=false",
@@ -134,7 +134,7 @@ public sealed class GitTransfer(ICommandExecutor executor, IGitLocator locator, 
             ["GIT_TERMINAL_PROMPT"] = "0", ["GCM_INTERACTIVE"] = "Never",
             ["GIT_ASKPASS"] = "", ["SSH_ASKPASS"] = "", ["SSH_ASKPASS_REQUIRE"] = "never",
             ["GIT_SSH_COMMAND"] = sshCommand, ["GIT_SSH_VARIANT"] = "ssh",
-            ["GIT_CONFIG_GLOBAL"] = "NUL", ["GIT_CONFIG_NOSYSTEM"] = "1",
+            ["GIT_CONFIG_GLOBAL"] = GitCommandPaths.NullDevice, ["GIT_CONFIG_NOSYSTEM"] = "1",
             ["GIT_CONFIG_COUNT"] = "0", ["GIT_CONFIG_PARAMETERS"] = "",
             ["GIT_DIR"] = null, ["GIT_WORK_TREE"] = null, ["GIT_INDEX_FILE"] = null,
             ["GIT_COMMON_DIR"] = null, ["GIT_OBJECT_DIRECTORY"] = null, ["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = null,
@@ -152,11 +152,11 @@ public sealed class GitTransfer(ICommandExecutor executor, IGitLocator locator, 
             if (account.AuthenticationType is not (AuthenticationType.Https or AuthenticationType.Both)
                 || string.IsNullOrWhiteSpace(account.HttpsSecretId))
                 return Result<Authentication>.Failure(new DomainError("TRANSFER_HTTPS_REQUIRED"));
-            var helper = helperPath ?? Path.Combine(AppContext.BaseDirectory, "gitbinder-credential.exe");
+            var helper = helperPath ?? GitCommandPaths.CredentialHelper;
             if (!File.Exists(helper)) return Result<Authentication>.Failure(new DomainError("TRANSFER_HELPER_MISSING"));
             // 精确 URL 作用域重置，防止仓库内更具体的 helper/extraHeader 覆盖选定账号。
             args.AddRange(["-c", $"credential.{url}.helper=", "-c",
-                $"credential.{url}.helper=!{Quote(helper.Replace('\\', '/'))} --account-id {account.Id:D}",
+                $"credential.{url}.helper=!{GitCommandPaths.Quote(GitCommandPaths.ToShellPath(helper))} --account-id {account.Id:D}",
                 "-c", $"http.{url}.extraHeader="]);
             return Result<Authentication>.Success(new(args, BaseOptions()));
         }
@@ -164,15 +164,13 @@ public sealed class GitTransfer(ICommandExecutor executor, IGitLocator locator, 
             || string.IsNullOrWhiteSpace(account.SshPrivateKeyPath) || !File.Exists(account.SshPrivateKeyPath))
             return Result<Authentication>.Failure(new DomainError("TRANSFER_SSH_REQUIRED"));
         // IdentitiesOnly 仅允许此私钥；已解锁的同一密钥可由 Agent 签名，不尝试其他账号密钥。
-        var keyPath = Path.GetFullPath(account.SshPrivateKeyPath).Replace('\\', '/');
-        var configPath = Path.GetFullPath(sshConfigPath!).Replace('\\', '/');
-        var ssh = $"ssh -F {Quote(configPath)} -i {Quote(keyPath)} -o IdentitiesOnly=yes"
+        var keyPath = GitCommandPaths.ToShellPath(Path.GetFullPath(account.SshPrivateKeyPath));
+        var configPath = GitCommandPaths.ToShellPath(Path.GetFullPath(sshConfigPath!));
+        var ssh = $"{GitCommandPaths.SshExecutable} -F {GitCommandPaths.Quote(configPath)} -i {GitCommandPaths.Quote(keyPath)} -o IdentitiesOnly=yes"
             + " -o BatchMode=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes";
         args.AddRange(["-c", $"core.sshCommand={ssh}"]);
         return Result<Authentication>.Success(new(args, BaseOptions(ssh)));
     }
 
-    // Git 的 helper/sshCommand 自身由 Git shell 解析；路径使用单引号转义，不拼接用户口令。
-    private static string Quote(string value) => "'" + value.Replace("'", "'\\''") + "'";
     private static Result Fail(string code, params string[] args) => Result.Failure(new DomainError(code, args));
 }

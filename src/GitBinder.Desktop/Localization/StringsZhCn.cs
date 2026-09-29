@@ -208,6 +208,7 @@ internal static class StringsZhCn
         ["Accounts.AliasDefaultToName"] = "默认等于提交姓名，可修改",
         ["ACCOUNT_NAME_REQUIRED"] = "提交姓名不能为空。",
         ["ACCOUNT_KEY_NOT_FOUND"] = "私钥文件不存在：{0}。",
+        ["ACCOUNT_KEY_IMPORT_FAILED"] = "私钥导入失败：{0}",
 
         // 平台管理
         ["Platforms.Title"] = "平台",

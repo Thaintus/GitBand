@@ -22,6 +22,21 @@ public sealed class GitConfigApplier : IGitConfigApplier, IGlobalGitConfigApplie
         _gitLocator = gitLocator;
     }
 
+    public string BuildSshCommand(Account account)
+    {
+        if (account.AuthenticationType is AuthenticationType.Ssh or AuthenticationType.Both
+            && !string.IsNullOrWhiteSpace(account.SshPrivateKeyPath))
+        {
+            var path = GitCommandPaths.ToShellPath(account.SshPrivateKeyPath);
+            return $"{GitCommandPaths.SshExecutable} -i {GitCommandPaths.Quote(path)} -o IdentitiesOnly=yes";
+        }
+
+        // 空身份阻断其他账号密钥，且不依赖 Windows 专用的 NUL 文件名。
+        var empty = GitCommandPaths.NullDevice;
+        return $"{GitCommandPaths.SshExecutable} -F {empty} -i {empty} -o BatchMode=yes -o IdentitiesOnly=yes"
+            + " -o IdentityAgent=none -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no";
+    }
+
     public async Task<(string Name, string Email)> ReadIdentityAsync(string repositoryPath, CancellationToken ct = default)
     {
         var name = await ReadConfigAsync(repositoryPath, "user.name", ct);
@@ -136,10 +151,7 @@ public sealed class GitConfigApplier : IGitConfigApplier, IGlobalGitConfigApplie
             }
         }
 
-        var sshCommand = account.AuthenticationType is AuthenticationType.Ssh or AuthenticationType.Both
-            && !string.IsNullOrWhiteSpace(account.SshPrivateKeyPath)
-                ? $"ssh -i \"{account.SshPrivateKeyPath}\" -o IdentitiesOnly=yes"
-                : NoFallbackSshCommand;
+        var sshCommand = BuildSshCommand(account);
         var ssh = await WriteGlobalConfigAsync("core.sshCommand", sshCommand, ct);
         if (!ssh.IsSuccess)
         {
@@ -402,18 +414,15 @@ public sealed class GitConfigApplier : IGitConfigApplier, IGlobalGitConfigApplie
 
     private static string BuildCredentialHelperCommand(Guid accountId)
     {
-        var helperPath = Path.Combine(AppContext.BaseDirectory, "gitbinder-credential.exe");
+        var helperPath = GitCommandPaths.CredentialHelper;
         if (!File.Exists(helperPath))
         {
             throw new FileNotFoundException("GitBinder Credential Helper is unavailable.", helperPath);
         }
 
-        var shellPath = Path.GetFullPath(helperPath).Replace('\\', '/');
-        return $"!\"{shellPath}\" --account-id {accountId:D}";
+        var shellPath = GitCommandPaths.ToShellPath(Path.GetFullPath(helperPath));
+        return $"!{GitCommandPaths.Quote(shellPath)} --account-id {accountId:D}";
     }
-
-    private const string NoFallbackSshCommand =
-        "ssh -F NUL -i NUL -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no";
 
     private async Task<string> ResolveGitAsync(CancellationToken ct)
     {

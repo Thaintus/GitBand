@@ -38,7 +38,7 @@ public class ProjectServiceTests
         var secretStore = new FakeSecretStore();
         var gitConfig = new FakeGitConfigApplier();
 
-        var accountService = new AccountService(accountRepo, new Guard(bindingRepo), new SecretService(secretStore), new FakeDataPath());
+        var accountService = new AccountService(accountRepo, new Guard(bindingRepo), new SecretService(secretStore), new FakePrivateKeyImporter());
         var bindingService = new BindingService(bindingRepo, accountRepo, projectRepo, secretStore, gitService, gitConfig, snapshotRepo, new FakeGitTransfer());
         var service = new ProjectService(projectRepo, gitService, new FakePathNormalizer(), accountRepo, bindingService);
 

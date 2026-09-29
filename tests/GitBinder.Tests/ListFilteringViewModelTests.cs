@@ -356,7 +356,7 @@ public sealed class ListFilteringViewModelTests
         public AccountsViewModel CreateAccounts()
             => new(Accounts,
                 new AccountService(Accounts, new DeletionGuard(Bindings),
-                    new SecretService(new FakeSecretStore()), new TestDataPath()),
+                    new SecretService(new FakeSecretStore()), new FakePrivateKeyImporter()),
                 Localization, new NoUiServiceProvider());
 
         public ProjectsViewModel CreateProjects(FakeGitService? git = null)

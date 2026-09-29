@@ -15,10 +15,8 @@ public static class CompositionRoot
 {
     public static IServiceProvider Build()
     {
-        // 先确定数据路径。
-        var baseDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var dataDirectory = Path.Combine(baseDir, "GitBinder");
-        var databasePath = Path.Combine(dataDirectory, "gitbinder.db");
+        // 与 Credential Helper 使用同一平台数据根，避免桌面端与凭据端读取不同数据库。
+        var dataPath = PlatformPaths.CreateApplicationDataPath();
 
         var services = new ServiceCollection();
 
@@ -28,7 +26,7 @@ public static class CompositionRoot
 
         // Application / Infrastructure / Platform。
         services.AddApplication();
-        services.AddInfrastructure(databasePath);
+        services.AddInfrastructure(dataPath.DatabasePath);
         services.AddPlatform();
 
         // ViewModels。

@@ -48,7 +48,7 @@ internal sealed class SmokeFixture
         var bindingService = new BindingService(bindings, AccountRepository, ProjectRepository,
             secrets, git, new FakeGitConfigApplier(), new FakeSnapshotRepository(), Transfer, resolver);
         var accountService = new AccountService(AccountRepository, new BindingDeletionGuard(bindings),
-            new SecretService(secrets), dataPath);
+            new SecretService(secrets), new FakePrivateKeyImporter());
         var platforms = PlatformRepository;
         var platformService = new PlatformService(platforms, settings);
         var projectService = new ProjectService(ProjectRepository, git, normalizer, AccountRepository, bindingService);

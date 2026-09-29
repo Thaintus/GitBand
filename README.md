@@ -2,7 +2,7 @@
 
 > 让每个仓库，用对账号。
 
-面向 **Windows** 的本地 Git 身份与凭据管理工具。把个人、公司和不同托管平台的账号集中管理，为每个仓库绑定合适的提交身份与认证凭据，减少反复修改 Git 配置的麻烦。
+面向 **Windows** 的本地 Git 身份与凭据管理工具，并提供 **macOS 实验性打包**。把个人、公司和不同托管平台的账号集中管理，为每个仓库绑定合适的提交身份与认证凭据，减少反复修改 Git 配置的麻烦。
 
 **Windows x64 · SSH / HTTPS · 中文 / English · Apache-2.0**
 
@@ -37,13 +37,21 @@
 
 在仓库的 [Releases 页面](https://github.com/thaintus/GitBand/releases)查看发布记录和附件，选择 `GitBinder-<版本号>-setup.exe`。如果尚无发布附件，可按下方的[源码构建](#源码构建)说明自行生成。
 
-- 当前发行目标为 **Windows x64**；暂未提供 macOS / Linux 支持。
+- 当前正式发行目标为 **Windows x64**；macOS 提供未公证、待实机验收的实验包，Linux 尚未适配。
 - 安装包自带 .NET 运行时，使用者无需单独安装 .NET SDK 或 Runtime。
 - 需要已安装系统 Git；使用 SSH 地址时还需要可用的 OpenSSH。
 - 安装向导需要管理员权限，支持选择安装目录及创建快捷方式。
 - 当前打包流程未配置代码签名。请核对下载来源；若发布页提供 SHA-256，可与本地文件哈希比对。
 
 安装目录与用户数据目录相互独立。升级前请从托盘菜单退出旧版本，再运行安装程序。
+
+### macOS 实验包
+
+- Apple Silicon（M 系列）选择 `osx-arm64`，Intel Mac 选择 `osx-x64`；目标系统为 macOS 14 或更新版本，自带 .NET 运行时，仍需系统 Git / OpenSSH。
+- `GitBinder-<版本号>-osx-<架构>-unsigned.zip` 包含 `GitBinder.app` 和本机签名/DMG 脚本。它不是已经签名、公证及实机验证的正式安装包，不应直接替代稳定发行版。
+- 按包内说明先在 Mac 完成本机签名，再将应用固定安装到 `/Applications`。完成认证配置后不要随意移动应用，否则写入 Git 配置的凭据助手路径会失效。
+- HTTPS 凭据保存在当前用户登录钥匙串；首次保存、更新应用签名或首次由凭据助手访问时可能需要系统授权。取消授权或钥匙串锁定时操作会失败，不回退为明文存储或其他账号。
+- 当前 Windows 环境只能完成跨平台发布与包结构校验；Mac 的启动、钥匙串授权、托盘、克隆/拉取仍需实机验证。详见 [macOS 打包与验收说明](aBase/doc/MACOS_PACKAGING.md)。
 
 ### 快速上手
 
@@ -69,7 +77,7 @@
 全局模式账号 > 项目绑定账号 > 默认账号
 ```
 
-GitBind 通过仓库本地 Git 配置、Git 全局配置与 `gitbinder-credential.exe` 配合系统 Git 工作，**当前没有 Git Shim，也不需要替换系统 `git.exe`**。
+GitBind 通过仓库本地 Git 配置、Git 全局配置与 `gitbinder-credential`（Windows 下带 `.exe`）配合系统 Git 工作，**当前没有 Git Shim，也不需要替换系统 Git**。
 
 - 普通模式下，为项目应用 `user.name`、`user.email` 及与 Remote 协议对应的认证配置；首次应用前保存相关配置快照。
 - 解绑会恢复保存的本地配置。移除项目会先执行解绑，再删除登记记录，**不会删除本地源码或 Git 仓库**。
@@ -86,7 +94,7 @@ Git 的新提交身份可表示为 `姓名 <>`，但部分平台或仓库策略�
 
 ### 全局模式
 
-开启全局模式时，会保存并修改当前 Windows 用户的 Git 全局 `user.name`、三个邮箱配置项（`user.email`、`author.email`、`committer.email`）、`core.sshCommand`、`credential.helper`，同时对已绑定仓库应用全局账号。
+开启全局模式时，会保存并修改当前系统用户的 Git 全局 `user.name`、三个邮箱配置项（`user.email`、`author.email`、`committer.email`）、`core.sshCommand`、`credential.helper`，同时对已绑定仓库应用全局账号。
 
 关闭后恢复原全局配置，并重新应用各项目原有绑定。全局模式不会把项目的绑定关系改成全局账号。
 
@@ -124,6 +132,8 @@ Windows 用户数据默认位于：
 ├── secrets\      # Windows DPAPI CurrentUser 加密后的机密
 └── keys\         # 导入的 SSH 私钥文件副本
 ```
+
+macOS 实验版使用 `~/Library/Application Support/GitBinder/` 存放数据库与私钥副本，凭据保存在系统登录钥匙串，不生成 Windows DPAPI 密文。导入的私钥目录权限为 `0700`、文件为 `0600`。Windows 数据目录不能直接复制到 Mac 作为凭据迁移方案。
 
 - HTTPS 密码 / Token 通过机密存储加密保存，数据库记录其引用，不把这些凭据写进 Git 配置。
 - **SSH 私钥是导入文件的副本，不是 DPAPI 加密文件。** 请保护私钥和数据目录的访问权限，不要把它们提交到仓库。
@@ -232,7 +242,7 @@ GitBinder.slnx
 │   ├── GitBinder.Application/       # 用例编排与端口接口
 │   ├── GitBinder.Domain/            # 实体、领域规则与有效账号决策
 │   ├── GitBinder.Infrastructure/    # Git CLI、SQLite 等外部能力实现
-│   ├── GitBinder.Platform/          # Windows 路径与 DPAPI 等平台适配
+│   ├── GitBinder.Platform/          # Windows DPAPI / macOS Keychain、路径和私钥导入
 │   └── GitBinder.CredentialHelper/  # Git Credential Helper 可执行程序
 ├── tests/GitBinder.Tests/          # 单元测试、Fake 与隔离的 Git 集成测试
 ├── build/                         # 构建、发布和 Inno Setup 脚本
@@ -250,6 +260,7 @@ GitBinder.slnx
 | [产品设计](aBase/doc/GitBind设计文档.md) | 产品目标、业务模型和设计背景，包含尚未落地的方案 |
 | [技术架构](aBase/doc/TECH_ARCHITECTURE.md) | 分层、存储、本地化及安全设计 |
 | [界面视觉规范](aBase/doc/UI_VISUAL_GUIDELINES.md) | 配色、布局及交互约定 |
+| [macOS 打包与验收](aBase/doc/MACOS_PACKAGING.md) | 实验包、钥匙串、Mac 本机签名及验证边界 |
 | [迭代记录](aBase/iteration/V1-首版开发.md) | 实际变更、验证边界和安装包记录 |
 | [数据库资料](aBase/sql/README.md) | Schema 与增量 SQL 参考；运行时以初始化及迁移代码为准 |
 | [文档维护规则](aBase/README.md) | aBase 目录职责和维护方式 |

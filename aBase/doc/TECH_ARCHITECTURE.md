@@ -1695,6 +1695,8 @@ Portable 版本对于开发工具用户建议保留。
 
 # 39. macOS 构建
 
+当前提供实验性双架构 `.app.zip`：`build/build-macos.ps1` 可在 Windows 交叉发布，Mac 本机通过包内脚本签名并生成未公证 DMG。平台路径、Keychain 与私钥权限适配的实际约定见 [macOS 打包与验收说明](MACOS_PACKAGING.md)。跨平台构建不等于 Mac 实机认证、窗口和安装验证；以下正式签名、公证要求仍然适用。
+
 Runtime Identifier：
 
 ```text
