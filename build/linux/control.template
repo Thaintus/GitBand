@@ -1,0 +1,16 @@
+Package: gitbinder
+Version: __VERSION__
+Architecture: __ARCHITECTURE__
+Maintainer: GitBinder contributors <noreply@github.com>
+Installed-Size: __INSTALLED_SIZE__
+Section: devel
+Priority: optional
+Homepage: https://github.com/thaintus/GitBand
+Depends: libc6 (>= 2.35), libgcc-s1, libstdc++6, libgssapi-krb5-2, libicu78 | libicu76 | libicu74 | libicu72 | libicu70, libssl3t64 | libssl3, libbrotli1, tzdata, zlib1g, ca-certificates, libx11-6, libice6, libsm6, libfontconfig1, libxext6, libxrandr2, libxi6, libxcursor1, libsecret-1-0, dbus-user-session, xdg-utils, git, openssh-client
+Recommends: gnome-keyring | keepassxc, fonts-noto-cjk, xwayland
+Description: Local Git identity and repository account manager
+ Manage accounts, repository bindings, and Git authentication locally.
+ This experimental Linux package bundles the .NET runtime, but requires
+ an X11 or XWayland desktop session and an unlocked Secret Service keyring.
+ No application launch, Git configuration change, or user data removal
+ is performed by package installation or removal.

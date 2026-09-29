@@ -1639,7 +1639,7 @@ settings.language
 settings.close_to_tray_on_close
 ```
 
-缺省值为 `true`：用户关闭主窗口时仅隐藏窗口，托盘菜单提供“显示窗口”和“退出 GitBind”；用户在设置中关闭该选项后，关闭窗口即退出应用。
+Windows/macOS 缺省值为 `true`：用户关闭主窗口时仅隐藏窗口，托盘菜单提供“显示窗口”和“退出 GitBind”；用户在设置中关闭该选项后，关闭窗口即退出应用。Linux 缺省值为 `false`，避免没有托盘宿主的桌面隐藏窗口后无法找回；确认支持托盘后可手动开启。窗口关闭逻辑与设置页共享平台默认值，已保存的有效用户选项优先。
 
 例如：
 
@@ -1730,6 +1730,8 @@ Apple Silicon
 ---
 
 # 40. Ubuntu / Linux 构建
+
+实验性实现使用 `build/build-linux.ps1` 生成双架构 `.deb` 与便携 `.tar.gz`，数据根遵循 XDG、凭据经 libsecret 访问已解锁的 Secret Service。发布布局、Linux 桌面依赖与实机验收边界见 [Linux 打包与验收说明](LINUX_PACKAGING.md)；不把 Windows 上交叉发布成功视为 Linux 安装/GUI/认证通过。
 
 Runtime Identifier：
 

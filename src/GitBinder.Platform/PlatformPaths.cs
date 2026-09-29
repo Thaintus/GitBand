@@ -1,5 +1,6 @@
 using GitBinder.Application.Common;
 using GitBinder.Platform.MacOS;
+using GitBinder.Platform.Linux;
 using GitBinder.Platform.Windows;
 
 namespace GitBinder.Platform;
@@ -11,6 +12,7 @@ public static class PlatformPaths
     {
         if (OperatingSystem.IsWindows()) return new WindowsApplicationDataPath();
         if (OperatingSystem.IsMacOS()) return new MacApplicationDataPath();
-        throw new PlatformNotSupportedException("GitBinder currently supports Windows and macOS.");
+        if (OperatingSystem.IsLinux()) return new LinuxApplicationDataPath();
+        throw new PlatformNotSupportedException("GitBinder currently supports Windows, macOS and Linux.");
     }
 }

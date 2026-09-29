@@ -2,13 +2,14 @@ using GitBinder.Application.Common;
 using GitBinder.Application.Security;
 using GitBinder.Platform.Windows;
 using GitBinder.Platform.MacOS;
+using GitBinder.Platform.Linux;
 using Microsoft.Extensions.DependencyInjection;
 using System.Runtime.Versioning;
 
 namespace GitBinder.Platform;
 
 /// <summary>
-/// Platform 层依赖注入注册（Windows / macOS 按运行时选择）。
+/// Platform 层依赖注入注册（Windows / macOS / Linux 按运行时选择）。
 /// </summary>
 public static class DependencyInjection
 {
@@ -22,9 +23,13 @@ public static class DependencyInjection
         {
             AddMacPlatformServices(services);
         }
+        else if (OperatingSystem.IsLinux())
+        {
+            AddLinuxPlatformServices(services);
+        }
         else
         {
-            throw new PlatformNotSupportedException("GitBinder currently supports Windows and macOS.");
+            throw new PlatformNotSupportedException("GitBinder currently supports Windows, macOS and Linux.");
         }
 
         return services;
@@ -54,5 +59,15 @@ public static class DependencyInjection
         services.AddSingleton<IShellService, MacShellService>();
         services.AddSingleton<IPrivateKeyImporter, MacPrivateKeyImporter>();
         services.AddSingleton<ISecretStore, MacKeychainSecretStore>();
+    }
+
+    [SupportedOSPlatform("linux")]
+    private static void AddLinuxPlatformServices(IServiceCollection services)
+    {
+        services.AddSingleton<IPathNormalizer, LinuxPathNormalizer>();
+        services.AddSingleton<IApplicationDataPath, LinuxApplicationDataPath>();
+        services.AddSingleton<IShellService, LinuxShellService>();
+        services.AddSingleton<IPrivateKeyImporter, LinuxPrivateKeyImporter>();
+        services.AddSingleton<ISecretStore, LinuxSecretServiceStore>();
     }
 }

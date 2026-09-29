@@ -41,9 +41,9 @@ public partial class SettingsViewModel : ViewModelBase
     [ObservableProperty]
     private CultureOption _selectedLanguage;
 
-    /// <summary>关闭主窗口时是否隐藏到系统托盘。默认开启。</summary>
+    /// <summary>关闭主窗口时是否隐藏到系统托盘；使用与主窗口一致的平台默认值。</summary>
     [ObservableProperty]
-    private bool _closeToTrayOnClose = true;
+    private bool _closeToTrayOnClose = DesktopSettingKeys.DefaultCloseToTrayOnClose;
 
     public ObservableCollection<CultureOption> Languages { get; } = [];
 
@@ -79,7 +79,8 @@ public partial class SettingsViewModel : ViewModelBase
         SelectedLanguage = Languages.FirstOrDefault(l => l.Name == current) ?? Languages[0];
 
         var closeToTray = await _settings.GetAsync(DesktopSettingKeys.CloseToTrayOnClose);
-        CloseToTrayOnClose = !bool.TryParse(closeToTray, out var enabled) || enabled;
+        CloseToTrayOnClose = bool.TryParse(closeToTray, out var enabled)
+            ? enabled : DesktopSettingKeys.DefaultCloseToTrayOnClose;
     }
 
     partial void OnSelectedLanguageChanged(CultureOption value)

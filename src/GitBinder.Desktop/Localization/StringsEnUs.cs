@@ -348,7 +348,7 @@ internal static class StringsEnUs
         ["Settings.LanguageLabel"] = "Language",
         ["Settings.LanguageDesc"] = "Switch UI language (takes effect immediately)",
         ["Settings.Tray"] = "System Tray",
-        ["Settings.CloseToTrayDesc"] = "Hide to the system tray when the window closes and keep GitBind running in the background. Right-click the tray icon to exit.",
+        ["Settings.CloseToTrayDesc"] = "Hide to the system tray when the window closes and keep GitBind running in the background. Right-click the tray icon to exit. This is off by default on Linux; enable it only if your desktop supports tray icons.",
 
         ["Tray.Tooltip"] = "GitBind - Repository Identity Manager",
         ["Tray.ShowWindow"] = "Show Window",

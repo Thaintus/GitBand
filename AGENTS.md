@@ -2,7 +2,7 @@
 
 ## 1. 项目范围与基本原则
 
-- GitBinder 是以 Windows 为正式发行目标、提供 macOS 实验包的本地 Git 身份与仓库账号管理工具，不是 Git 图形客户端；不要扩展提交、分支、合并等 Git GUI 功能。macOS 打包不代表已完成实机验收；Linux 尚未适配。
+- GitBinder 是以 Windows 为正式发行目标、提供 macOS / Linux 实验包的本地 Git 身份与仓库账号管理工具，不是 Git 图形客户端；不要扩展提交、分支、合并等 Git GUI 功能。跨平台打包不代表已完成目标系统实机验收。
 - 技术栈为 .NET 10、Avalonia、CommunityToolkit.Mvvm、SQLite（Microsoft.Data.Sqlite）和系统 Git/OpenSSH。
 - 默认使用中文沟通与代码注释；用户明确要求英文时例外。
 - 先从最具体的类、页面、错误码或目录开始查找，只读取完成当前判断所需的上下文。
@@ -61,6 +61,7 @@
 - 用户数据库默认位于 `%LOCALAPPDATA%\GitBinder\gitbinder.db`。已有用户库兼容优先，修改表结构必须在 `DatabaseInitializer` 增加可重复执行的迁移，并保留旧数据。
 - SQLite 查询使用明确列名和稳定映射，不使用 `SELECT *`；新增列时考虑旧库物理列顺序和默认值。
 - HTTPS 凭据、SSH 私钥口令等机密只通过 Secret Store 保存；Windows 使用 CurrentUser DPAPI，macOS 使用登录钥匙串，不允许明文回退或把秘密放进进程参数。macOS 数据目录为 `~/Library/Application Support/GitBinder/`，桌面端与 Credential Helper 必须共享同一平台路径工厂；导入私钥权限为 `0600`、目录为 `0700`。数据库、日志、测试输出、截图和提交中不得出现明文机密。
+- Linux 使用 libsecret / Secret Service 和已解锁的用户会话密钥环；缺库、会话服务不可用、密钥环锁定时不得退回明文或其他账号。数据根遵守绝对 `XDG_DATA_HOME`，否则使用 `~/.local/share/GitBinder/`。桌面端与 Helper 共用平台路径，导入私钥权限同样为 `0600`/`0700`；不修改用户密钥环/桌面会话配置来完成构建。
 - 绑定首次应用本地 Git 身份前保留 `RepositorySnapshot`；解绑时恢复该快照后再删除绑定/快照记录。
 - 除用户明确要求外，不清除 `%LOCALAPPDATA%\GitBinder`、密钥目录、SQLite 文件或安装目录；任何数据清理都要先核实精确路径并说明可恢复性。
 
@@ -79,6 +80,7 @@
 - 涉及真实 Git 的测试必须使用临时仓库；涉及 `git config --global` 必须设置隔离的 `GIT_CONFIG_GLOBAL`，绝不能改写开发机真实 Git 全局配置。
 - 用户明确要求打包时，使用 `build/build-installer.ps1 -Version <x.y.z>`；该流程会发布桌面程序和 Credential Helper，再生成 `dist/GitBinder-<x.y.z>-setup.exe`。
 - 用户明确要求 macOS 打包时使用 `build/build-macos.ps1 -Version <x.y.z>`；同时生成 `osx-arm64` / `osx-x64` 实验 `.app.zip`，独立暂存于 `artifacts/macos/`，不清理 Windows 发布目录或覆盖历史包。macOS 本机签名、公证与运行验收须单独说明，不得以跨平台发布成功代替。
+- 用户明确要求 Linux 打包时使用 `build/build-linux.ps1 -Version <x.y.z>`；生成 `linux-x64` / `linux-arm64` 的 `.deb` 与便携 `.tar.gz`，独立暂存于 `artifacts/linux/`。静态检查包结构和 ELF 架构不等于安装、GUI、密钥环或真实认证验证；不主动安装系统依赖、覆盖安装或启动生产应用。Linux 默认不关闭到托盘，防止无托盘宿主的桌面隐藏窗口后无法找回。
 - 打包后核对安装包存在、文件版本和哈希；不自动覆盖安装、启动安装程序或修改用户的现有 Git 配置，除非用户明确授权。
 - 若创建本地提交，提交前检查变更范围；可以提交但禁止推送远端。
 

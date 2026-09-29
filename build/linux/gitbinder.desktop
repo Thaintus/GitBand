@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=GitBinder
+Comment=Manage Git identities and repository account bindings
+Comment[zh_CN]=管理 Git 身份与仓库账号绑定
+Exec=/opt/gitbinder/GitBinder.Desktop
+TryExec=/opt/gitbinder/GitBinder.Desktop
+Icon=gitbinder
+Terminal=false
+Categories=Development;RevisionControl;
+StartupNotify=false

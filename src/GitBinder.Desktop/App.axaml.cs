@@ -128,12 +128,12 @@ public partial class App : Avalonia.Application
         try
         {
             var value = _settings?.GetAsync(DesktopSettingKeys.CloseToTrayOnClose).GetAwaiter().GetResult();
-            return !bool.TryParse(value, out var enabled) || enabled;
+            return bool.TryParse(value, out var enabled) ? enabled : DesktopSettingKeys.DefaultCloseToTrayOnClose;
         }
         catch
         {
-            // 设置读取失败时仍遵循默认行为，防止用户因临时数据库错误失去托盘入口。
-            return true;
+            // 保持平台默认行为；Linux 不能假设有可用托盘入口。
+            return DesktopSettingKeys.DefaultCloseToTrayOnClose;
         }
     }
 

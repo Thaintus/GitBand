@@ -1,6 +1,7 @@
 using GitBinder.Application.Common;
 using GitBinder.Platform;
 using GitBinder.Platform.MacOS;
+using GitBinder.Platform.Linux;
 using GitBinder.Platform.Windows;
 
 namespace GitBinder.Tests;
@@ -27,6 +28,8 @@ public sealed class MacPlatformTests
             Assert.EndsWith("/Library/Application Support/GitBinder", data.DataDirectory);
             Assert.Equal(Path.Combine(data.DataDirectory, "gitbinder.db"), data.DatabasePath);
         }
+        else if (OperatingSystem.IsLinux())
+            Assert.IsType<LinuxApplicationDataPath>(PlatformPaths.CreateApplicationDataPath());
         else Assert.Throws<PlatformNotSupportedException>(() => PlatformPaths.CreateApplicationDataPath());
     }
 

@@ -363,7 +363,7 @@ internal static class StringsZhCn
         ["Settings.LanguageLabel"] = "语言",
         ["Settings.LanguageDesc"] = "切换应用界面语言（立即生效）",
         ["Settings.Tray"] = "系统托盘",
-        ["Settings.CloseToTrayDesc"] = "关闭窗口时隐藏到系统托盘，应用继续在后台运行。右键托盘图标可退出应用。",
+        ["Settings.CloseToTrayDesc"] = "关闭窗口时隐藏到系统托盘，应用继续在后台运行。右键托盘图标可退出应用。Linux 默认关闭此选项，请确认桌面支持托盘后再开启。",
 
         // 系统托盘
         ["Tray.Tooltip"] = "GitBind - 仓库身份管理",

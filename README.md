@@ -2,7 +2,7 @@
 
 > 让每个仓库，用对账号。
 
-面向 **Windows** 的本地 Git 身份与凭据管理工具，并提供 **macOS 实验性打包**。把个人、公司和不同托管平台的账号集中管理，为每个仓库绑定合适的提交身份与认证凭据，减少反复修改 Git 配置的麻烦。
+面向 **Windows** 的本地 Git 身份与凭据管理工具，并提供 **macOS / Linux 实验性打包**。把个人、公司和不同托管平台的账号集中管理，为每个仓库绑定合适的提交身份与认证凭据，减少反复修改 Git 配置的麻烦。
 
 **Windows x64 · SSH / HTTPS · 中文 / English · Apache-2.0**
 
@@ -28,7 +28,7 @@
 | 远程地址维护 | 修改仓库 `origin`，在常规 SSH / HTTPS 地址之间快捷转换 |
 | 连接测试 | 使用当前生效配置读取远程引用，辅助排查认证问题 |
 | 平台管理 | 通过新增/编辑弹窗维护平台名称与 Host，支持自建服务、启用与禁用；已启用平台优先显示 |
-| 托盘与界面 | 默认关闭窗口后驻留托盘，可在设置中调整；支持简体中文与 English |
+| 托盘与界面 | Windows/macOS 默认关闭后驻留托盘，Linux 默认退出，可在设置中调整；支持简体中文与 English |
 | 删除保护 | 账号、项目、平台和 SSH 私钥移除入口统一为右上角 `×`，并提供二次确认 |
 
 ## 下载与安装
@@ -37,7 +37,7 @@
 
 在仓库的 [Releases 页面](https://github.com/thaintus/GitBand/releases)查看发布记录和附件，选择 `GitBinder-<版本号>-setup.exe`。如果尚无发布附件，可按下方的[源码构建](#源码构建)说明自行生成。
 
-- 当前正式发行目标为 **Windows x64**；macOS 提供未公证、待实机验收的实验包，Linux 尚未适配。
+- 当前正式发行目标为 **Windows x64**；macOS 提供未公证、待实机验收的实验包，Linux 提供待桌面实机验收的 `.deb` 与便携实验包。
 - 安装包自带 .NET 运行时，使用者无需单独安装 .NET SDK 或 Runtime。
 - 需要已安装系统 Git；使用 SSH 地址时还需要可用的 OpenSSH。
 - 安装向导需要管理员权限，支持选择安装目录及创建快捷方式。
@@ -52,6 +52,10 @@
 - 按包内说明先在 Mac 完成本机签名，再将应用固定安装到 `/Applications`。完成认证配置后不要随意移动应用，否则写入 Git 配置的凭据助手路径会失效。
 - HTTPS 凭据保存在当前用户登录钥匙串；首次保存、更新应用签名或首次由凭据助手访问时可能需要系统授权。取消授权或钥匙串锁定时操作会失败，不回退为明文存储或其他账号。
 - 当前 Windows 环境只能完成跨平台发布与包结构校验；Mac 的启动、钥匙串授权、托盘、克隆/拉取仍需实机验证。详见 [macOS 打包与验收说明](aBase/doc/MACOS_PACKAGING.md)。
+
+### Linux 实验包
+
+Linux 用户请先阅读 [Linux 实验包安装说明](aBase/doc/LINUX_PACKAGING.md)：Ubuntu/Debian 使用与 CPU 对应的 `.deb`，其他发行版需自行满足便携包的原生依赖。程序自带 .NET，但仍需要桌面会话、Git/OpenSSH、libsecret 与已解锁的 Secret Service 密钥环。不要用 `sudo` 启动应用。
 
 ### 快速上手
 
@@ -135,6 +139,8 @@ Windows 用户数据默认位于：
 
 macOS 实验版使用 `~/Library/Application Support/GitBinder/` 存放数据库与私钥副本，凭据保存在系统登录钥匙串，不生成 Windows DPAPI 密文。导入的私钥目录权限为 `0700`、文件为 `0600`。Windows 数据目录不能直接复制到 Mac 作为凭据迁移方案。
 
+Linux 实验版使用 `$XDG_DATA_HOME/GitBinder/`（未设置或不是绝对路径时为 `~/.local/share/GitBinder/`）；凭据经 libsecret 存入当前用户的 Secret Service 密钥环，不保存到明文文件。需要可用的会话 D-Bus 及 Secret Service 服务；前台保存可能要求创建/解锁密钥环并授权，后台助手读取不主动解锁，缺少服务或锁定时失败，不回退其他账号。私钥目录/文件权限分别为 `0700`/`0600`；不要混用不同用户或不一致的 XDG 环境启动桌面程序与凭据助手。密钥环不提供对同一登录用户下其他应用的强隔离。
+
 - HTTPS 密码 / Token 通过机密存储加密保存，数据库记录其引用，不把这些凭据写进 Git 配置。
 - **SSH 私钥是导入文件的副本，不是 DPAPI 加密文件。** 请保护私钥和数据目录的访问权限，不要把它们提交到仓库。
 - DPAPI 密文与当前 Windows 用户上下文相关，不要把直接复制数据目录当作可靠的跨用户、跨设备凭据迁移方案。
@@ -163,7 +169,7 @@ macOS 实验版使用 `~/Library/Application Support/GitBinder/` 存放数据库
 
 ### 关闭窗口后为什么还在运行？
 
-默认行为是隐藏到系统托盘。可从托盘菜单选择“退出 GitBind”，或在设置中关闭托盘驻留选项。关闭窗口或退出进程都不等于关闭全局模式。
+Windows / macOS 默认隐藏到系统托盘，可从托盘菜单选择“退出 GitBind”，或在设置中关闭托盘驻留。Linux 桌面不一定提供托盘宿主，因此默认关闭窗口即退出；确认桌面有托盘支持后，可手动开启驻留。关闭窗口或退出进程都不等于关闭全局模式。
 
 ### 项目目录移动了怎么办？
 
@@ -223,6 +229,10 @@ dotnet test GitBinder.slnx -c Debug --no-build
 .\build\build.ps1 -Configuration Release -Package -Version 1.2.0
 ```
 
+### Linux 实验包构建
+
+Linux 实验包使用独立入口 `./build/build-linux.ps1 -Version 1.2.0`，默认生成 x64/ARM64 的 `.deb` 和 `.tar.gz`，不执行测试，不覆盖历史产物。具体依赖、安装路径与验收边界见 [Linux 打包文档](aBase/doc/LINUX_PACKAGING.md)。
+
 ### 移动源码目录
 
 解决方案和项目引用使用相对路径；构建脚本通过自身所在目录定位仓库，安装包脚本也使用相对路径。移动或重命名源码目录后，从新位置重新打开解决方案即可，无须替换源码中的工作区盘符或目录名。Git、SSH 和 Inno Setup 的常见安装目录通过 Windows 系统目录定位，不依赖固定的 `C:` 盘或用户名。
@@ -242,7 +252,7 @@ GitBinder.slnx
 │   ├── GitBinder.Application/       # 用例编排与端口接口
 │   ├── GitBinder.Domain/            # 实体、领域规则与有效账号决策
 │   ├── GitBinder.Infrastructure/    # Git CLI、SQLite 等外部能力实现
-│   ├── GitBinder.Platform/          # Windows DPAPI / macOS Keychain、路径和私钥导入
+│   ├── GitBinder.Platform/          # DPAPI / Keychain / Linux Secret Service、路径和私钥导入
 │   └── GitBinder.CredentialHelper/  # Git Credential Helper 可执行程序
 ├── tests/GitBinder.Tests/          # 单元测试、Fake 与隔离的 Git 集成测试
 ├── build/                         # 构建、发布和 Inno Setup 脚本
@@ -261,6 +271,7 @@ GitBinder.slnx
 | [技术架构](aBase/doc/TECH_ARCHITECTURE.md) | 分层、存储、本地化及安全设计 |
 | [界面视觉规范](aBase/doc/UI_VISUAL_GUIDELINES.md) | 配色、布局及交互约定 |
 | [macOS 打包与验收](aBase/doc/MACOS_PACKAGING.md) | 实验包、钥匙串、Mac 本机签名及验证边界 |
+| [Linux 打包与验收](aBase/doc/LINUX_PACKAGING.md) | 双架构 deb/便携包、桌面依赖、密钥环与验证边界 |
 | [迭代记录](aBase/iteration/V1-首版开发.md) | 实际变更、验证边界和安装包记录 |
 | [数据库资料](aBase/sql/README.md) | Schema 与增量 SQL 参考；运行时以初始化及迁移代码为准 |
 | [文档维护规则](aBase/README.md) | aBase 目录职责和维护方式 |
