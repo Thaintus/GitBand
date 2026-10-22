@@ -64,7 +64,26 @@ public sealed class LocalizationService : ILocalizationService, INotifyPropertyC
     public string GetString(string key, params object[] args)
     {
         var template = GetString(key);
-        return args.Length == 0 ? template : string.Format(CultureInfo.InvariantCulture, template, args);
+        // DomainError.Arguments 的静态类型是 IReadOnlyList<string>，传给 params 时会被
+        // 包装成单个 object，展开领域参数，避免显示 System.String[] 或丢失后续占位符
+        if (args is [IReadOnlyList<string> errorArguments])
+        {
+            args = errorArguments.Cast<object>().ToArray();
+        }
+        if (args.Length == 0)
+        {
+            return template;
+        }
+
+        try
+        {
+            return string.Format(CultureInfo.InvariantCulture, template, args);
+        }
+        catch (FormatException)
+        {
+            // 资源占位符与参数数量不匹配时保留安全模板，不能让错误提示再次抛错
+            return template;
+        }
     }
 
     public Task SetCultureAsync(CultureInfo culture, CancellationToken ct = default)

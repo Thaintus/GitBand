@@ -24,6 +24,23 @@ public interface IGitConfigApplier
     /// <summary>读取当前仓库 credential.helper。</summary>
     Task<string> ReadCredentialHelperAsync(string repositoryPath, CancellationToken ct = default);
 
+    /// <summary>捕获本次操作前的仓库配置，生产实现应保留缺失、空值及 Helper 链顺序</summary>
+    async Task<GitLocalConfigSnapshot> CaptureLocalConfigAsync(string repositoryPath, CancellationToken ct = default)
+    {
+        // 兼容旧实现，完整列表和缺失状态由支持精确快照的实现提供
+        var identity = await ReadIdentityAsync(repositoryPath, ct);
+        var emailConfig = await ReadEmailConfigAsync(repositoryPath, ct);
+        var sshCommand = await ReadSshCommandAsync(repositoryPath, ct);
+        var helper = await ReadCredentialHelperAsync(repositoryPath, ct);
+        return new GitLocalConfigSnapshot(identity.Name, emailConfig, sshCommand,
+            string.IsNullOrEmpty(helper) ? [] : [helper]);
+    }
+
+    /// <summary>恢复本次操作前的仓库配置，不替代最早绑定时的持久化快照</summary>
+    Task RestoreLocalConfigAsync(string repositoryPath, GitLocalConfigSnapshot snapshot, CancellationToken ct = default)
+        => RestoreAsync(repositoryPath, snapshot.UserName, snapshot.EmailConfig.UserEmail,
+            snapshot.SshCommand, snapshot.CredentialHelpers.LastOrDefault(), ct, snapshot.EmailConfig);
+
     /// <summary>应用账号身份（写入仓库本地 config，用于 Materialize 兼容模式）。</summary>
     Task ApplyIdentityAsync(
         string repositoryPath,

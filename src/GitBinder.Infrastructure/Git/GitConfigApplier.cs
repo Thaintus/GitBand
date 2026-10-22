@@ -53,6 +53,42 @@ public sealed class GitConfigApplier : IGitConfigApplier, IGlobalGitConfigApplie
     public async Task<string> ReadCredentialHelperAsync(string repositoryPath, CancellationToken ct = default)
         => await ReadConfigAsync(repositoryPath, "credential.helper", ct);
 
+    public async Task<GitLocalConfigSnapshot> CaptureLocalConfigAsync(string repositoryPath, CancellationToken ct = default)
+    {
+        var name = await ReadExactLocalConfigValueAsync(repositoryPath, "user.name", ct);
+        var userEmail = await ReadExactLocalConfigValueAsync(repositoryPath, "user.email", ct);
+        var authorEmail = await ReadExactLocalConfigValueAsync(repositoryPath, "author.email", ct);
+        var committerEmail = await ReadExactLocalConfigValueAsync(repositoryPath, "committer.email", ct);
+        var sshCommand = await ReadExactLocalConfigValueAsync(repositoryPath, "core.sshCommand", ct);
+        var helpers = await ReadExactLocalConfigValuesAsync(repositoryPath, "credential.helper", true, ct);
+        return new GitLocalConfigSnapshot(name, new GitEmailConfigSnapshot(userEmail, authorEmail, committerEmail),
+            sshCommand, helpers);
+    }
+
+    public async Task RestoreLocalConfigAsync(string repositoryPath, GitLocalConfigSnapshot snapshot,
+        CancellationToken ct = default)
+    {
+        await RestoreExactLocalConfigValueAsync(repositoryPath, "user.name", snapshot.UserName, ct);
+        foreach (var (key, value) in GetEmailConfigValues(snapshot.EmailConfig))
+        {
+            await RestoreExactLocalConfigValueAsync(repositoryPath, key, value, ct);
+        }
+        await RestoreExactLocalConfigValueAsync(repositoryPath, "core.sshCommand", snapshot.SshCommand, ct);
+
+        if (snapshot.CredentialHelpers.Count == 0)
+        {
+            await WriteLocalConfigAsync(repositoryPath, "credential.helper", null, ct);
+            return;
+        }
+
+        // 首项可能是阻断全局凭据继承的空 reset，不能按空白配置删除
+        await WriteLocalConfigValueAsync(repositoryPath, "credential.helper", snapshot.CredentialHelpers[0], ct);
+        foreach (var helper in snapshot.CredentialHelpers.Skip(1))
+        {
+            await AddLocalConfigAsync(repositoryPath, "credential.helper", helper, ct);
+        }
+    }
+
     public async Task ApplyIdentityAsync(
         string repositoryPath,
         string gitName,
@@ -200,9 +236,40 @@ public sealed class GitConfigApplier : IGitConfigApplier, IGlobalGitConfigApplie
     private async Task<string> ReadConfigAsync(string repositoryPath, string key, CancellationToken ct)
     {
         var git = await ResolveGitAsync(ct);
-        var result = await _executor.ExecuteAsync(git, ["config", "--local", "--get", key], repositoryPath, ct);
+        var result = await ExecuteLocalConfigAsync(git, ["config", "--local", "--get", key], repositoryPath, ct);
         return result.IsSuccess ? result.StdOut.Trim() : string.Empty;
     }
+
+    private async Task<string?> ReadExactLocalConfigValueAsync(string repositoryPath, string key, CancellationToken ct)
+        => (await ReadExactLocalConfigValuesAsync(repositoryPath, key, false, ct)).SingleOrDefault();
+
+    private async Task<string[]> ReadExactLocalConfigValuesAsync(string repositoryPath, string key,
+        bool allValues, CancellationToken ct)
+    {
+        var git = await ResolveGitAsync(ct);
+        var result = await ExecuteLocalConfigAsync(git,
+            ["config", "--local", "--null", allValues ? "--get-all" : "--get", key], repositoryPath, ct);
+        if (result.ExitCode == 1 && result.StdOut.Length == 0 && string.IsNullOrWhiteSpace(result.StdErr))
+        {
+            return [];
+        }
+        if (!result.IsSuccess)
+        {
+            throw new InvalidOperationException($"Failed to read local Git config '{key}' (exit code {result.ExitCode}).");
+        }
+        if (!result.StdOut.EndsWith('\0'))
+        {
+            throw new InvalidOperationException($"Invalid null-delimited output for local Git config '{key}'.");
+        }
+
+        // 只去掉记录终止符，值内和末尾换行以及空 reset 都属于原配置
+        return result.StdOut[..^1].Split('\0', StringSplitOptions.None);
+    }
+
+    private Task RestoreExactLocalConfigValueAsync(string repositoryPath, string key, string? value, CancellationToken ct)
+        => value is null
+            ? WriteLocalConfigAsync(repositoryPath, key, null, ct)
+            : WriteLocalConfigValueAsync(repositoryPath, key, value, ct);
 
     private async Task<GitEmailConfigSnapshot> ReadEmailConfigAsync(
         string scope,
@@ -222,7 +289,10 @@ public sealed class GitConfigApplier : IGitConfigApplier, IGlobalGitConfigApplie
         CancellationToken ct)
     {
         var git = await ResolveGitAsync(ct);
-        var result = await _executor.ExecuteAsync(git, ["config", scope, "--get", key], repositoryPath, ct);
+        var arguments = new[] { "config", scope, "--get", key };
+        var result = scope == "--local"
+            ? await ExecuteLocalConfigAsync(git, arguments, repositoryPath!, ct)
+            : await _executor.ExecuteAsync(git, arguments, repositoryPath, ct);
         if (result.IsSuccess)
         {
             // 仅去掉 Git 输出的行尾，保留空值和原配置中的空白。
@@ -367,7 +437,7 @@ public sealed class GitConfigApplier : IGitConfigApplier, IGlobalGitConfigApplie
         var args = string.IsNullOrWhiteSpace(value)
             ? new[] { "config", "--local", "--unset-all", key }
             : new[] { "config", "--local", "--replace-all", key, value };
-        var result = await _executor.ExecuteAsync(git, args, repositoryPath, ct);
+        var result = await ExecuteLocalConfigAsync(git, args, repositoryPath, ct);
         if (result.IsSuccess || (string.IsNullOrWhiteSpace(value) && result.ExitCode == 5))
         {
             return;
@@ -383,7 +453,7 @@ public sealed class GitConfigApplier : IGitConfigApplier, IGlobalGitConfigApplie
         CancellationToken ct)
     {
         var git = await ResolveGitAsync(ct);
-        var result = await _executor.ExecuteAsync(
+        var result = await ExecuteLocalConfigAsync(
             git,
             ["config", "--local", "--replace-all", key, value],
             repositoryPath,
@@ -401,7 +471,7 @@ public sealed class GitConfigApplier : IGitConfigApplier, IGlobalGitConfigApplie
         CancellationToken ct)
     {
         var git = await ResolveGitAsync(ct);
-        var result = await _executor.ExecuteAsync(
+        var result = await ExecuteLocalConfigAsync(
             git,
             ["config", "--local", "--add", key, value],
             repositoryPath,
@@ -410,6 +480,17 @@ public sealed class GitConfigApplier : IGitConfigApplier, IGlobalGitConfigApplie
         {
             throw new InvalidOperationException($"Failed to write local Git config '{key}' (exit code {result.ExitCode}).");
         }
+    }
+
+    private async Task<CommandResult> ExecuteLocalConfigAsync(string git, IReadOnlyList<string> arguments,
+        string repositoryPath, CancellationToken ct)
+    {
+        // 本地配置按指定目录定位，不能继承父进程指向其他仓库或配置文件的环境
+        ct.ThrowIfCancellationRequested();
+        var result = await _executor.ExecuteWithOptionsAsync(git, arguments, repositoryPath, GitService.RepositoryOptions(), ct);
+        result.ThrowIfTerminationUnconfirmed();
+        ct.ThrowIfCancellationRequested();
+        return result;
     }
 
     private static string BuildCredentialHelperCommand(Guid accountId)

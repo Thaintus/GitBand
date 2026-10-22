@@ -19,7 +19,7 @@ public sealed class GitServiceProtocolTests
 
         var origin = await service.GetTransferOriginUrlAsync(RepositoryPath);
 
-        Assert.Equal(HttpsUrl, origin);
+        Assert.Equal(SshUrl, origin);
         Assert.Equal(0, executor.OrdinaryCount);
         var call = Assert.Single(executor.Calls);
         Assert.Equal(new[] { "remote", "get-url", "origin" }, call.Args.TakeLast(3));
@@ -27,18 +27,25 @@ public sealed class GitServiceProtocolTests
     }
 
     [Fact]
-    public async Task GetTransferOrigin_DoesNotUseOrdinaryEnvironmentInsteadOfRewrite()
+    public async Task GetTransferOrigin_UsesSameGlobalRewriteAsMetadataAndActualTransfer()
     {
-        var executor = new RecordingExecutor { AllowOrdinaryRead = true };
+        var executor = new RecordingExecutor();
         var service = new GitService(executor, new Locator());
 
         var ideLikeOrigin = await service.GetOriginUrlAsync(RepositoryPath);
         var transferOrigin = await service.GetTransferOriginUrlAsync(RepositoryPath);
 
         Assert.Equal(SshUrl, ideLikeOrigin);
-        Assert.Equal(HttpsUrl, transferOrigin);
-        Assert.Equal(1, executor.OrdinaryCount);
-        Assert.Single(executor.Calls);
+        Assert.Equal(SshUrl, transferOrigin);
+        Assert.Equal(0, executor.OrdinaryCount);
+        Assert.Equal(2, executor.MetadataCount);
+        Assert.Equal(2, executor.Calls.Count);
+        var transferCall = executor.Calls[1];
+        AssertIsolation(transferCall.Args, transferCall.Options, transferCall.Path);
+        var metadataCall = executor.Calls[0];
+        Assert.Null(metadataCall.Options.Environment["GIT_DIR"]);
+        Assert.Null(metadataCall.Options.Environment["GIT_WORK_TREE"]);
+        Assert.Null(metadataCall.Options.Environment["GIT_COMMON_DIR"]);
     }
 
     [Theory]
@@ -105,8 +112,8 @@ public sealed class GitServiceProtocolTests
         Assert.Contains($"core.hooksPath={nullDevice}", args);
         Assert.Contains("protocol.allow=never", args);
         Assert.Contains("core.askPass=", args);
-        Assert.Equal(nullDevice, options.Environment["GIT_CONFIG_GLOBAL"]);
-        Assert.Equal("1", options.Environment["GIT_CONFIG_NOSYSTEM"]);
+        Assert.False(options.Environment.ContainsKey("GIT_CONFIG_GLOBAL"));
+        Assert.False(options.Environment.ContainsKey("GIT_CONFIG_NOSYSTEM"));
         Assert.Equal("0", options.Environment["GIT_CONFIG_COUNT"]);
         Assert.Equal("", options.Environment["GIT_CONFIG_PARAMETERS"]);
         Assert.Equal("0", options.Environment["GIT_TERMINAL_PROMPT"]);
@@ -124,8 +131,8 @@ public sealed class GitServiceProtocolTests
     private sealed class RecordingExecutor : ICommandExecutor
     {
         public List<(string[] Args, CommandExecutionOptions Options, string? Path)> Calls { get; } = [];
-        public bool AllowOrdinaryRead { get; init; }
         public int OrdinaryCount { get; private set; }
+        public int MetadataCount { get; private set; }
         public bool ReadFails { get; init; }
         public int ConfigExitCode { get; init; } = 1;
         public bool SetFails { get; init; }
@@ -134,15 +141,18 @@ public sealed class GitServiceProtocolTests
             string? workingDirectory = null, CancellationToken cancellationToken = default)
         {
             OrdinaryCount++;
-            if (!AllowOrdinaryRead) throw new InvalidOperationException("Transfer origin operations must use isolated options.");
-            // 模拟普通环境的全局 url.*.insteadOf 将 HTTPS 重写为 SSH。
-            return Task.FromResult(new CommandResult { ExitCode = 0, StdOut = SshUrl });
+            throw new InvalidOperationException("Repository operations must isolate inherited Git directory variables.");
         }
 
         public Task<CommandResult> ExecuteWithOptionsAsync(string executable, IReadOnlyList<string> arguments,
             string? workingDirectory, CommandExecutionOptions options, CancellationToken cancellationToken = default)
         {
             Calls.Add((arguments.ToArray(), options, workingDirectory));
+            if (!options.Environment.ContainsKey("GIT_CONFIG_GLOBAL"))
+            {
+                MetadataCount++;
+                // 元数据和传输读取同一套本机地址重写，仓库定位变量仍被隔离
+            }
             var index = 0;
             while (arguments[index] == "-c") index += 2;
             var args = arguments.Skip(index).ToArray();
@@ -150,7 +160,7 @@ public sealed class GitServiceProtocolTests
                 return Task.FromResult(new CommandResult { ExitCode = ConfigExitCode, StdOut = HttpsUrl });
             if (args[1] == "set-url")
                 return Task.FromResult(new CommandResult { ExitCode = SetFails ? 128 : 0, StdErr = "dummy-secret" });
-            return Task.FromResult(new CommandResult { ExitCode = ReadFails ? 128 : 0, StdOut = HttpsUrl + "\n" });
+            return Task.FromResult(new CommandResult { ExitCode = ReadFails ? 128 : 0, StdOut = SshUrl + "\n" });
         }
     }
 }

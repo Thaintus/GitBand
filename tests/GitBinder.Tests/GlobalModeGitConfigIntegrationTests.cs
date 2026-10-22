@@ -57,7 +57,7 @@ public sealed class GlobalModeGitConfigIntegrationTests
             await accounts.AddAsync(bound);
             await accounts.AddAsync(global);
 
-            var project = new Project { RepositoryPath = repositoryPath };
+            var project = new Project { RepositoryPath = repositoryPath, GitDir = Path.Combine(repositoryPath, ".git") };
             await projects.AddAsync(project);
             await bindings.AddAsync(new Binding { ProjectId = project.Id, AccountId = bound.Id });
 

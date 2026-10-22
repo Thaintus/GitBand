@@ -241,6 +241,14 @@ public sealed class FakeGitTransfer : IGitTransfer
 /// <summary>假 Git 服务：记录 config 应用与恢复调用，不真正执行 Git。</summary>
 public sealed class FakeGitService : IGitService
 {
+    public bool InitializeSucceeds { get; set; } = true;
+
+    public int InitializeCount { get; private set; }
+
+    public string? LastInitializedPath { get; private set; }
+
+    public Func<string, CancellationToken, Task<Result>>? OnInitialize { get; set; }
+
     public Func<string, bool>? ValidateRepository { get; set; }
 
     public bool ValidateResult { get; set; } = true;
@@ -256,6 +264,30 @@ public sealed class FakeGitService : IGitService
     public bool OriginReadFails { get; set; }
 
     public string? LastSetOriginUrl { get; private set; }
+
+    public Task<Result> InitializeRepositoryAsync(string path, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        InitializeCount++;
+        LastInitializedPath = path;
+        if (OnInitialize is not null)
+            return OnInitialize(path, ct);
+        if (!InitializeSucceeds)
+            return Task.FromResult(Result.Failure(new DomainError("PROJECT_GIT_INITIALIZATION_FAILED")));
+
+        var comparer = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var previousValidation = ValidateRepository;
+        var previousResult = ValidateResult;
+        var alreadyRepository = (previousValidation?.Invoke(path) ?? previousResult)
+            && string.Equals(RepositoryRoot, path, comparer);
+        RepositoryRoot = path;
+        ValidateResult = true;
+        ValidateRepository = candidate => string.Equals(candidate, path, comparer)
+            || (previousValidation?.Invoke(candidate) ?? previousResult);
+        if (!alreadyRepository)
+            OriginUrl = string.Empty;
+        return Task.FromResult(Result.Success());
+    }
 
     public Task<bool> ValidateRepositoryAsync(string path, CancellationToken ct = default)
         => Task.FromResult(ValidateRepository?.Invoke(path) ?? ValidateResult);

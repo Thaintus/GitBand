@@ -28,14 +28,19 @@ public partial class ProjectsViewModel : ViewModelBase
     private readonly ProjectTransferService _transferService;
     private readonly Func<string, string, string, Task<bool>> _confirmProtocolChange;
     private readonly Func<ProjectsViewModel, Task> _showCloneDialog;
+    private readonly IShellService? _shellService;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanManageProjects))]
     private bool _isBindingBusy;
     private CancellationTokenSource? _transferCancellation;
     private string _suggestedCloneFolderName = string.Empty;
-    [ObservableProperty] private string _operationProgress = string.Empty;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasOperationProgress))]
+    [NotifyPropertyChangedFor(nameof(HasPageProgress))]
+    private string _operationProgress = string.Empty;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasPageProgress))]
     private bool _isCloneEditorOpen;
 
     [ObservableProperty]
@@ -47,9 +52,12 @@ public partial class ProjectsViewModel : ViewModelBase
     private string _cloneFeedback = string.Empty;
 
     public bool HasCloneFeedback => !string.IsNullOrWhiteSpace(CloneFeedback);
+    public bool HasOperationProgress => !string.IsNullOrWhiteSpace(OperationProgress);
+    public bool HasPageProgress => !IsCloneEditorOpen && (IsTransferBusy || HasOperationProgress);
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanManageProjects))]
+    [NotifyPropertyChangedFor(nameof(HasPageProgress))]
     private bool _isTransferBusy;
 
     [ObservableProperty]
@@ -84,11 +92,8 @@ public partial class ProjectsViewModel : ViewModelBase
     public ObservableCollection<ProjectItemViewModel> Items { get; } = [];
 
     /// <summary>供主窗口 Escape 关闭保护查询；包括传输结束后的登记/刷新收尾。</summary>
-    public bool HasPendingOperations => !CanManageProjects
-        || CloneCommand.IsRunning || PullCommand.IsRunning || PullGroupCommand.IsRunning
-        || CreateCommand.IsRunning || RemoveCommand.IsRunning || SaveRemoteCommand.IsRunning
-        || SavePathCommand.IsRunning || UnbindCommand.IsRunning
-        || Items.Any(item => item.IsPathSaving);
+    public bool HasPendingOperations => !CanManageProjects || HasProjectOperations || _pendingLoads > 0
+        || Items.Any(item => item.IsBusy || item.IsPathSaving || item.IsSwitchingBinding || item.IsAssigningGroup);
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasNoMatches))]
@@ -131,7 +136,8 @@ public partial class ProjectsViewModel : ViewModelBase
         ProjectTransferService transferService,
         ProjectGroupService groupService,
         Func<string, string, string, Task<bool>>? confirmProtocolChange = null,
-        Func<ProjectsViewModel, Task>? showCloneDialog = null)
+        Func<ProjectsViewModel, Task>? showCloneDialog = null,
+        IShellService? shellService = null)
     {
         _repository = repository;
         _projectService = projectService;
@@ -148,55 +154,51 @@ public partial class ProjectsViewModel : ViewModelBase
         {
             await DialogHelper.ShowDialogAsync<bool>(new Views.CloneRepositoryDialog(viewModel));
         });
+        _shellService = shellService;
     }
 
-    public async Task LoadAsync()
+    public Task LoadAsync() => ReloadProjectsAsync(allowPageOperation: false);
+
+    private async Task ReloadProjectsAsync(bool allowPageOperation)
     {
-        if (IsTransferBusy) return;
-        var projects = await _repository.GetAllAsync();
-        var accounts = await _accountRepository.GetAllAsync();
-        var selectableAccounts = accounts.Where(account => account.Enabled).ToList();
-        CloneAccounts = selectableAccounts;
-        SelectedCloneAccount = selectableAccounts.FirstOrDefault(a => a.Id == SelectedCloneAccount?.Id)
-            ?? selectableAccounts.FirstOrDefault(a => a.IsDefault) ?? selectableAccounts.FirstOrDefault();
-        var loadedItems = new List<ProjectItemViewModel>(projects.Count);
-        foreach (var storedProject in projects)
+        if (!allowPageOperation && !CanManageProjects) return;
+        _pendingLoads++;
+        NotifyOperationState();
+        await _reloadGate.WaitAsync();
+        try
         {
-            var refresh = await _projectService.RefreshMetadataAsync(storedProject.Id);
-            var project = refresh.IsSuccess ? refresh.Value! : storedProject;
-            var binding = await _bindingRepository.GetByProjectIdAsync(project.Id);
-            Account? boundAccount = null;
-            if (binding is not null)
+            var projects = await _repository.GetAllAsync();
+            var accounts = await _accountRepository.GetAllAsync();
+            var selectableAccounts = accounts.Where(account => account.Enabled).ToList();
+            CloneAccounts = selectableAccounts;
+            SelectedCloneAccount = selectableAccounts.FirstOrDefault(a => a.Id == SelectedCloneAccount?.Id)
+                ?? selectableAccounts.FirstOrDefault(a => a.IsDefault) ?? selectableAccounts.FirstOrDefault();
+            foreach (var storedProject in projects)
             {
-                boundAccount = accounts.FirstOrDefault(account => account.Id == binding.AccountId);
+                var item = Items.FirstOrDefault(current => current.Project.Id == storedProject.Id);
+                using var reservation = TryReserveProject(storedProject.Id, item);
+                if (reservation is null) continue;
+                await RefreshProjectCoreAsync(storedProject.Id, accounts);
             }
-
-            var effectiveAccount = _effectiveAccountResolver.Resolve(project);
-            var effectiveReason = _effectiveAccountResolver.ResolveReason(project);
-            loadedItems.Add(new ProjectItemViewModel(
-                project,
-                binding,
-                boundAccount,
-                effectiveAccount,
-                effectiveReason,
-                selectableAccounts,
-                _localization)
+            var storedIds = projects.Select(project => project.Id).ToHashSet();
+            foreach (var item in Items.Where(item => !storedIds.Contains(item.Project.Id)).ToList())
             {
-                MetadataWarning = refresh.IsSuccess
-                    ? (string.IsNullOrWhiteSpace(project.OriginUrl) ? _localization.GetString("Projects.NoOrigin") : string.Empty)
-                    : _localization.GetString(refresh.Error!.Code, refresh.Error.Arguments)
-                        + " " + _localization.GetString("Projects.CachedMetadata"),
-            });
+                using var reservation = TryReserveProject(item.Project.Id, item);
+                if (reservation is null) continue;
+                // 列表快照之后可能刚登记了项目，移除前重新确认
+                if (await _repository.GetByIdAsync(item.Project.Id) is not null) continue;
+                Items.Remove(item);
+                if (ReferenceEquals(SelectedItem, item)) SelectedItem = null;
+            }
+            HasItems = Items.Count > 0;
+            await ReloadGroupsCoreAsync();
         }
-
-        Items.Clear();
-        foreach (var item in loadedItems)
+        finally
         {
-            Items.Add(item);
+            _reloadGate.Release();
+            _pendingLoads--;
+            NotifyOperationState();
         }
-
-        HasItems = Items.Count > 0;
-        await ReloadGroupsAsync();
     }
 
     partial void OnSearchTextChanged(string value) => ApplyFilter();
@@ -292,7 +294,7 @@ public partial class ProjectsViewModel : ViewModelBase
 
         // 失败也可能已完成克隆或登记；刷新列表，但不清理任何本地目录。
         // IsCloneBusy 延续到刷新结束，避免这个窗口关闭或重复提交。
-        try { await LoadAsync(); }
+        try { await ReloadProjectsAsync(allowPageOperation: true); }
         catch (Exception) { message += " " + _localization.GetString("Projects.TransferReloadFailed"); }
         finally
         {
@@ -309,136 +311,162 @@ public partial class ProjectsViewModel : ViewModelBase
         else CloneFeedback = message;
     }
 
-    [RelayCommand]
+    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task PullAsync(ProjectItemViewModel? item)
     {
-        if (item is null || !CanManageProjects) return;
-        IsBindingBusy = true;
-        try
-        {
-            if (!await EnsureCompatibleProtocolAsync(item.Project.Id)) return;
-            await RunTransferAsync(ct => _transferService.PullAsync(item.Project.Id, ct), "Projects.PullSuccess",
-                () => _effectiveAccountResolver.Resolve(item.Project)?.DisplayAlias);
-        }
-        catch (Exception) { Feedback = _localization.GetString("TRANSFER_FAILED"); }
-        finally { IsBindingBusy = false; }
-    }
-
-    private async Task RunTransferAsync(Func<CancellationToken, Task<GitBinder.Domain.Common.Result>> operation,
-        string successKey, Func<string?> accountAlias)
-    {
-        IsTransferBusy = true;
-        GroupPullDetails = string.Empty;
-        _transferCancellation = new CancellationTokenSource();
+        using var operation = TryBeginProjectOperation(item);
+        if (operation is null || item is null) return;
+        if (!EnsureRepositoryAvailable(item, requireRemote: false)) return;
+        var cancellationToken = operation.EnableCancellation();
         string message;
         try
         {
-            OperationProgress = _localization.GetString("Projects.TransferRunning", accountAlias() ?? string.Empty);
-            var result = await operation(_transferCancellation.Token);
-            message = result.IsSuccess ? _localization.GetString(successKey)
+            item.OperationProgress = _localization.GetString("Projects.TransferRunning",
+                _effectiveAccountResolver.Resolve(item.Project)?.DisplayAlias ?? string.Empty);
+            // 拉取目标可能是非 origin 跟踪远程，不能预先改写 origin 来匹配账号协议
+            var result = await _transferService.PullAsync(item.Project.Id, cancellationToken);
+            message = result.IsSuccess ? _localization.GetString("Projects.PullSuccess")
                 : _localization.GetString(result.Error!.Code, result.Error.Arguments.Cast<object>().ToArray());
         }
-        catch (Exception) { message = _localization.GetString("TRANSFER_FAILED"); }
-        finally
-        {
-            _transferCancellation.Dispose();
-            _transferCancellation = null;
-            IsTransferBusy = false;
-            OperationProgress = string.Empty;
-        }
-        try { await LoadAsync(); }
+        catch (Exception) { message = _localization.GetString(cancellationToken.IsCancellationRequested ? "TRANSFER_CANCELLED" : "TRANSFER_FAILED"); }
+        finally { operation.FinishCancellation(); }
+        try { await RefreshProjectAsync(item.Project.Id); }
         catch (Exception) { message += " " + _localization.GetString("Projects.TransferReloadFailed"); }
-        Feedback = message;
+        Feedback = item.Name + "：" + message;
     }
 
-    /// <summary>从统一的页头“新建”入口选择并登记仓库。</summary>
+    /// <summary>选择并登记本地项目目录，尚未初始化 Git 的项目也可先登记</summary>
     [RelayCommand]
     private async Task CreateAsync()
     {
+        if (!CanManageProjects) return;
+        IsProjectRegistrationBusy = true;
         Feedback = string.Empty;
-        var path = await _directoryPicker();
-        if (string.IsNullOrWhiteSpace(path))
+        try
         {
-            return;
+            var path = await _directoryPicker();
+            if (string.IsNullOrWhiteSpace(path)) return;
+            var result = await _projectService.AddAsync(path);
+            if (result.IsSuccess)
+            {
+                await ReloadProjectsAsync(allowPageOperation: true);
+            }
+            else
+            {
+                Feedback = _localization.GetString(result.Error!.Code, result.Error.Arguments);
+            }
         }
-
-        var result = await _projectService.AddAsync(path);
-        if (result.IsSuccess)
+        catch (Exception)
         {
-            Feedback = string.Empty;
-            await LoadAsync();
+            Feedback = _localization.GetString("PROJECT_ADD_FAILED");
         }
-        else
-        {
-            Feedback = _localization.GetString(result.Error!.Code, result.Error.Arguments);
-        }
+        finally { IsProjectRegistrationBusy = false; }
     }
 
-    [RelayCommand]
+    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task RemoveAsync(ProjectItemViewModel? item)
     {
-        if (item is null)
+        using var operation = TryBeginProjectOperation(item);
+        if (operation is null || item is null) return;
+        try
         {
-            return;
+            var confirmed = await DialogHelper.ConfirmAsync(
+                _localization.GetString("Common.Confirm"),
+                _localization.GetString("Projects.Remove.Confirm", item.Name),
+                _localization.GetString("Common.Delete"));
+            if (!confirmed) return;
+            var result = await _projectService.RemoveAsync(item.Project.Id);
+            if (result.IsSuccess)
+            {
+                Feedback = string.Empty;
+                await RefreshProjectAsync(item.Project.Id);
+            }
+            else Feedback = _localization.GetString(result.Error!.Code, result.Error.Arguments);
         }
-
-        var confirmed = await DialogHelper.ConfirmAsync(
-            _localization.GetString("Common.Confirm"),
-            _localization.GetString("Projects.Remove.Confirm", item.Name),
-            _localization.GetString("Common.Delete"));
-        if (!confirmed)
-        {
-            return;
-        }
-
-        var result = await _projectService.RemoveAsync(item.Project.Id);
-        if (result.IsSuccess)
-        {
-            Feedback = string.Empty;
-            await LoadAsync();
-        }
-        else
-        {
-            Feedback = _localization.GetString(result.Error!.Code, result.Error.Arguments);
-        }
+        catch (Exception) { Feedback = _localization.GetString("PROJECT_REMOVE_FAILED"); }
     }
 
     [RelayCommand]
     private void StartEditRemote(ProjectItemViewModel? item)
     {
-        item?.BeginRemoteEdit();
+        if (item?.CanManageProject == true && CanManageProjects) item.BeginRemoteEdit();
     }
 
-    [RelayCommand]
+    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task SaveRemoteAsync(ProjectItemViewModel? item)
     {
-        if (item is null)
+        using var operation = TryBeginProjectOperation(item);
+        if (operation is null || item is null) return;
+        var editingUrl = item.EditingOriginUrl ?? string.Empty;
+        if (item.IsLocalDirectory)
         {
-            return;
+            var normalizedUrl = editingUrl.Trim();
+            if (string.IsNullOrWhiteSpace(normalizedUrl))
+            {
+                Feedback = _localization.GetString("PROJECT_REMOTE_URL_REQUIRED");
+                return;
+            }
+            if (Uri.TryCreate(normalizedUrl, UriKind.Absolute, out var uri)
+                && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+                && !string.IsNullOrEmpty(uri.UserInfo))
+            {
+                Feedback = _localization.GetString("PROJECT_REMOTE_CREDENTIAL_FORBIDDEN");
+                return;
+            }
+            if (!GitTransferRemote.TryParse(normalizedUrl, out _))
+            {
+                Feedback = _localization.GetString("PROJECT_REMOTE_URL_INVALID");
+                return;
+            }
         }
 
-        var result = await _projectService.UpdateOriginUrlAsync(item.Project.Id, item.EditingOriginUrl);
-        if (result.IsSuccess)
+        var remoteSaved = false;
+        string? saveFailureFeedback = null;
+        try
         {
-            Feedback = string.Empty;
-            await LoadAsync();
+            if (!await ConfirmRepositoryInitializationAsync(item)) return;
+            var result = await _projectService.UpdateOriginUrlAsync(item.Project.Id, editingUrl);
+            remoteSaved = result.IsSuccess || result.Error?.Code == "PROJECT_REMOTE_SAVED_BINDING_APPLY_FAILED";
+            if (!result.IsSuccess)
+                saveFailureFeedback = _localization.GetString(result.Error!.Code, result.Error.Arguments);
+            // 写入失败也可能已成功初始化，刷新状态但保留地址输入供用户修正
+            await RefreshProjectAsync(item.Project.Id);
+            if (result.IsSuccess)
+            {
+                item.CancelRemoteEdit();
+                Feedback = string.Empty;
+            }
+            else
+            {
+                var refreshedItem = Items.FirstOrDefault(current => current.Project.Id == item.Project.Id);
+                if (refreshedItem is not null)
+                {
+                    refreshedItem.BeginRemoteEdit();
+                    refreshedItem.EditingOriginUrl = editingUrl;
+                }
+                Feedback = saveFailureFeedback!;
+            }
         }
-        else
+        catch (Exception)
         {
-            Feedback = _localization.GetString(result.Error!.Code, result.Error.Arguments);
+            var refreshedItem = Items.FirstOrDefault(current => current.Project.Id == item.Project.Id) ?? item;
+            refreshedItem.BeginRemoteEdit();
+            refreshedItem.EditingOriginUrl = editingUrl;
+            Feedback = saveFailureFeedback
+                ?? _localization.GetString(remoteSaved ? "Projects.RemoteReloadFailed" : "PROJECT_REMOTE_SAVE_FAILED");
         }
     }
 
     [RelayCommand]
     private void CancelEditRemote(ProjectItemViewModel? item)
     {
-        item?.CancelRemoteEdit();
+        if (item?.CanManageProject == true) item.CancelRemoteEdit();
     }
 
     [RelayCommand]
     private void SwitchRemoteProtocol(ProjectItemViewModel? item)
     {
-        if (item is null)
+        if (item?.CanManageProject != true)
         {
             return;
         }
@@ -453,9 +481,28 @@ public partial class ProjectsViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    private void StartEditPath(ProjectItemViewModel? item)
+    private void OpenDirectory(ProjectItemViewModel? item)
     {
         if (item is null) return;
+        try
+        {
+            var path = item.Project.RepositoryPath;
+            if (!Path.IsPathFullyQualified(path) || !Directory.Exists(path))
+            {
+                Feedback = _localization.GetString("PROJECT_DIRECTORY_NOT_FOUND", path);
+                return;
+            }
+            if (_shellService is null) throw new InvalidOperationException("Shell service unavailable");
+            _shellService.OpenDirectory(Path.GetFullPath(path));
+            Feedback = string.Empty;
+        }
+        catch (Exception) { Feedback = _localization.GetString("PROJECT_OPEN_DIRECTORY_FAILED"); }
+    }
+
+    [RelayCommand]
+    private void StartEditPath(ProjectItemViewModel? item)
+    {
+        if (item?.CanManageProject != true || !CanManageProjects) return;
         item.EditingPath = item.PathText;
         item.IsPathEditorOpen = true;
     }
@@ -463,15 +510,16 @@ public partial class ProjectsViewModel : ViewModelBase
     [RelayCommand]
     private void CancelEditPath(ProjectItemViewModel? item)
     {
-        if (item is null) return;
+        if (item?.CanManageProject != true) return;
         item.EditingPath = item.PathText;
         item.IsPathEditorOpen = false;
     }
 
-    [RelayCommand]
+    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task BrowsePathAsync(ProjectItemViewModel? item)
     {
-        if (item is null) return;
+        using var operation = TryBeginProjectOperation(item);
+        if (operation is null || item is null) return;
         try
         {
             var path = await _directoryPicker();
@@ -483,10 +531,11 @@ public partial class ProjectsViewModel : ViewModelBase
         }
     }
 
-    [RelayCommand]
+    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task SavePathAsync(ProjectItemViewModel? item)
     {
-        if (item is null || item.IsPathSaving) return;
+        using var operation = TryBeginProjectOperation(item);
+        if (operation is null || item is null) return;
         item.IsPathSaving = true;
         try
         {
@@ -500,7 +549,9 @@ public partial class ProjectsViewModel : ViewModelBase
             var result = await _projectService.UpdatePathAsync(item.Project.Id, newPath);
             if (result.IsSuccess)
             {
-                await LoadAsync();
+                await RefreshProjectAsync(item.Project.Id);
+                item.EditingPath = item.PathText;
+                item.IsPathEditorOpen = false;
                 Feedback = _localization.GetString("Projects.PathUpdated");
             }
             else
@@ -521,91 +572,142 @@ public partial class ProjectsViewModel : ViewModelBase
     /// <summary>账号下拉选择后立即创建或修改项目绑定。</summary>
     public async Task SwitchBindingAccountAsync(ProjectItemViewModel item, Account account)
     {
-        // 筛选隐藏再显示会重建账号选择控件；正在改绑时忽略其初始化事件。
-        if (!CanManageProjects || item.IsSwitchingBinding || account.Id == item.BoundAccount?.Id)
-        {
-            return;
-        }
-
+        if (item.IsRestoringSelection) return;
+        if (item.IsSwitchingBinding) { item.RestorePendingBindingSelection(); return; }
+        if (account.Id == item.BoundAccount?.Id) return;
+        using var operation = TryBeginProjectOperation(item);
+        if (operation is null) { item.RestoreBoundAccountSelection(); return; }
+        item.PendingBindingAccount = account;
         item.IsSwitchingBinding = true;
-        IsBindingBusy = true;
         var bindingSaved = false;
+        var initializedForBinding = false;
         try
         {
-            item.SelectedBindingAccount = account;
+            var hasRemote = item.HasRemote;
+            if (item.IsLocalDirectory)
+            {
+                if (!await ConfirmRepositoryInitializationAsync(item))
+                {
+                    item.RestoreBoundAccountSelection();
+                    return;
+                }
+                var initialization = await _projectService.InitializeRepositoryAsync(item.Project.Id);
+                if (!initialization.IsSuccess)
+                {
+                    item.RestoreBoundAccountSelection();
+                    await RefreshProjectAsync(item.Project.Id);
+                    Feedback = _localization.GetString(initialization.Error!.Code, initialization.Error.Arguments);
+                    return;
+                }
+                initializedForBinding = true;
+                hasRemote = !string.IsNullOrWhiteSpace(initialization.Value!.OriginUrl);
+            }
+            item.RestorePendingBindingSelection();
             var result = await _bindingService.BindAsync(item.Project.Id, account.Id);
             if (result.IsSuccess)
             {
                 bindingSaved = true;
                 Feedback = string.Empty;
                 // 先保留用户已选择的绑定；地址协议变更必须再次确认，取消不撤销绑定。
-                await EnsureCompatibleProtocolAsync(item.Project.Id);
-                await LoadAsync();
+                // 本地 Git 仓库尚无远程地址时，提交身份仍可绑定，无需发起协议切换
+                if (hasRemote) await EnsureCompatibleProtocolAsync(item.Project.Id);
+                await RefreshProjectAsync(item.Project.Id);
             }
             else
             {
                 item.RestoreBoundAccountSelection();
+                if (initializedForBinding) await RefreshProjectAsync(item.Project.Id);
                 Feedback = _localization.GetString(result.Error!.Code, result.Error.Arguments);
             }
         }
         catch (Exception)
         {
             if (!bindingSaved) item.RestoreBoundAccountSelection();
+            if (initializedForBinding && !bindingSaved)
+            {
+                // 绑定异常不会撤销已初始化的仓库，刷新失败也保留原绑定错误提示
+                try { await RefreshProjectAsync(item.Project.Id); }
+                catch (Exception) { }
+            }
             Feedback = _localization.GetString(bindingSaved ? "Projects.BindingReloadFailed" : "BINDING_APPLY_FAILED");
         }
         finally
         {
             item.IsSwitchingBinding = false;
-            IsBindingBusy = false;
+            item.PendingBindingAccount = null;
         }
     }
 
     /// <summary>从项目卡片直接解除账号绑定。</summary>
-    [RelayCommand]
+    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task UnbindAsync(ProjectItemViewModel? item)
     {
-        if (item?.Binding is null)
+        using var operation = TryBeginProjectOperation(item);
+        if (operation is null || item?.Binding is null) return;
+        try
         {
-            return;
+            var result = await _bindingService.UnbindAsync(item.Project.Id);
+            if (result.IsSuccess)
+            {
+                Feedback = string.Empty;
+                await RefreshProjectAsync(item.Project.Id);
+            }
+            else Feedback = _localization.GetString(result.Error!.Code, result.Error.Arguments);
         }
-
-        var result = await _bindingService.UnbindAsync(item.Project.Id);
-        if (result.IsSuccess)
-        {
-            Feedback = string.Empty;
-            await LoadAsync();
-        }
-        else
-        {
-            Feedback = _localization.GetString(result.Error!.Code, result.Error.Arguments);
-        }
+        catch (Exception) { Feedback = _localization.GetString("BINDING_UNBIND_FAILED"); }
     }
 
     /// <summary>使用当前项目的生效账号测试远程认证。</summary>
-    [RelayCommand]
+    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task TestBindingAsync(ProjectItemViewModel? item)
     {
-        if (!CanManageProjects) return;
+        using var operation = TryBeginProjectOperation(item);
+        if (operation is null) return;
+        if (item is not null && !EnsureRepositoryAvailable(item, requireRemote: true)) return;
         if (item?.Binding is null)
         {
             Feedback = _localization.GetString("Projects.BindingRequired");
             return;
         }
 
-        IsBindingBusy = true;
         try
         {
             if (!await EnsureCompatibleProtocolAsync(item.Project.Id)) return;
-            OperationProgress = _localization.GetString("Test.Running");
-            var result = await _bindingService.TestAsync(item.Binding);
-            Feedback = result.Success
+            var cancellationToken = operation.EnableCancellation();
+            item.OperationProgress = _localization.GetString("Test.Running");
+            var result = await _bindingService.TestAsync(item.Binding, cancellationToken);
+            operation.FinishCancellation();
+            Feedback = item.Name + "：" + (result.Success
                 ? _localization.GetString("Test.Success") + $"（{result.Duration.TotalMilliseconds:0} ms）"
                 : _localization.GetString("Test.Failed") + "\n" + (result.Error is { } error
                     ? _localization.GetString(error.Code, error.Arguments.Cast<object>().ToArray())
-                    : _localization.GetString("TEST_FAILED"));
+                    : _localization.GetString("TEST_FAILED")));
         }
-        catch (Exception) { Feedback = _localization.GetString("Test.Failed"); }
-        finally { OperationProgress = string.Empty; IsBindingBusy = false; }
+        catch (OperationCanceledException) { Feedback = item.Name + "：" + _localization.GetString("TRANSFER_CANCELLED"); }
+        catch (Exception) { Feedback = item.Name + "：" + _localization.GetString("Test.Failed"); }
+        finally { operation.FinishCancellation(); }
+    }
+
+    private Task<bool> ConfirmRepositoryInitializationAsync(ProjectItemViewModel item)
+        => item.IsLocalDirectory
+            ? _confirmProtocolChange(_localization.GetString("Projects.InitializeGitConfirmTitle"),
+                _localization.GetString("Projects.InitializeGitConfirmMessage", item.Project.RepositoryPath),
+                _localization.GetString("Projects.InitializeGitConfirm"))
+            : Task.FromResult(true);
+
+    private bool EnsureRepositoryAvailable(ProjectItemViewModel item, bool requireRemote = false)
+    {
+        if (item.IsLocalDirectory)
+        {
+            Feedback = _localization.GetString("PROJECT_GIT_NOT_INITIALIZED");
+            return false;
+        }
+        if (requireRemote && !item.HasRemote)
+        {
+            Feedback = _localization.GetString("PROJECT_ORIGIN_NOT_CONFIGURED");
+            return false;
+        }
+        return true;
     }
 
     /// <summary>协议不匹配时仅生成预览，明确确认后才写 origin；取消不执行网络测试或传输。</summary>
@@ -632,7 +734,7 @@ public partial class ProjectsViewModel : ViewModelBase
             Feedback = _localization.GetString(result.Error!.Code, result.Error.Arguments.Cast<object>().ToArray());
             return false;
         }
-        await LoadAsync();
+        await RefreshProjectAsync(projectId);
         return true;
     }
 
@@ -645,17 +747,17 @@ public partial class ProjectItemViewModel : ViewModelBase
 {
     private readonly ILocalizationService _localization;
 
-    public Project Project { get; }
+    public Project Project { get; private set; }
 
-    public Binding? Binding { get; }
+    public Binding? Binding { get; private set; }
 
-    public Account? BoundAccount { get; }
+    public Account? BoundAccount { get; private set; }
 
-    public Account? EffectiveAccount { get; }
+    public Account? EffectiveAccount { get; private set; }
 
-    public EffectiveReason EffectiveReason { get; }
+    public EffectiveReason EffectiveReason { get; private set; }
 
-    public IReadOnlyList<Account> AvailableAccounts { get; }
+    public IReadOnlyList<Account> AvailableAccounts { get; private set; }
 
     [ObservableProperty]
     private Account? _selectedBindingAccount;
@@ -675,9 +777,13 @@ public partial class ProjectItemViewModel : ViewModelBase
     [ObservableProperty]
     private string _editingPath = string.Empty;
 
-    public string MetadataWarning { get; init; } = string.Empty;
+    public string MetadataWarning { get; internal set; } = string.Empty;
 
     public bool HasMetadataWarning => !string.IsNullOrEmpty(MetadataWarning);
+
+    public bool MetadataReadFailed { get; internal set; }
+    public bool HasMetadataError => HasMetadataWarning && MetadataReadFailed;
+    public bool HasMetadataNotice => HasMetadataWarning && !MetadataReadFailed;
 
     [ObservableProperty]
     private string _editingOriginUrl = string.Empty;
@@ -699,7 +805,8 @@ public partial class ProjectItemViewModel : ViewModelBase
         Project = project;
         Binding = binding;
         BoundAccount = boundAccount;
-        EffectiveAccount = effectiveAccount;
+        // 普通目录仅被登记，不能把全局/默认账号标记为已经应用到仓库
+        EffectiveAccount = project.IsLocalDirectory ? null : effectiveAccount;
         EffectiveReason = effectiveReason;
         AvailableAccounts = availableAccounts;
         SelectedBindingAccount = availableAccounts.FirstOrDefault(account => account.Id == boundAccount?.Id);
@@ -726,9 +833,17 @@ public partial class ProjectItemViewModel : ViewModelBase
 
     public string EffectiveAccountLabel => _localization.GetString("Projects.EffectiveAccountLabel", EffectiveAccountAlias);
 
-    public string EffectiveReasonLabel => _localization.GetString($"Projects.Reason.{EffectiveReason}");
+    public string EffectiveReasonLabel => IsLocalDirectory
+        ? _localization.GetString("Projects.LocalDirectory")
+        : _localization.GetString($"Projects.Reason.{EffectiveReason}");
 
     public bool HasBinding => Binding is not null;
+    public bool IsLocalDirectory => Project.IsLocalDirectory;
+    public bool HasGitRepository => !IsLocalDirectory;
+    public bool HasRemote => !string.IsNullOrWhiteSpace(Project.OriginUrl);
+    public bool CanBindAccount => CanManageProject && !IsSwitchingBinding;
+    public bool CanTest => CanManageProject && HasGitRepository && HasRemote && HasBinding;
+    public bool CanPull => CanManageProject && HasGitRepository;
 
     public string RemoteProtocolSwitchText
     {
@@ -757,7 +872,10 @@ public partial class ProjectItemViewModel : ViewModelBase
     /// <summary>绑定失败时还原下拉显示，允许用户再次选择后重试。</summary>
     public void RestoreBoundAccountSelection()
     {
-        SelectedBindingAccount = BoundAccount;
+        var wasRestoring = IsRestoringSelection;
+        IsRestoringSelection = true;
+        try { SelectedBindingAccount = AvailableAccounts.FirstOrDefault(account => account.Id == BoundAccount?.Id); }
+        finally { IsRestoringSelection = wasRestoring; }
     }
 
     /// <summary>切换编辑框中的标准 SSH/HTTPS Remote；尚未保存到仓库。</summary>
@@ -790,7 +908,10 @@ public partial class ProjectItemViewModel : ViewModelBase
         return builder.Uri.AbsoluteUri;
     }
 
-    public string ProtocolLabel => _localization.GetString("Projects.ProtocolLabel", ProtocolText);
+    public string ProtocolLabel => IsLocalDirectory
+        ? _localization.GetString("Projects.LocalDirectory")
+        : !HasRemote ? _localization.GetString("Projects.LocalRepository")
+        : _localization.GetString("Projects.ProtocolLabel", ProtocolText);
 
     public string HostLabel => _localization.GetString("Projects.HostLabel", RemoteHost);
 

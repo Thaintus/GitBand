@@ -98,11 +98,13 @@ public sealed partial class SmokeApp : App
                 await VerifyAccountEditorAsync();
                 await VerifyPlatformEditorAsync();
                 await VerifyCloneEditorAsync();
+                await VerifyProjectConcurrencyAsync();
                 await VerifyPageEscapeAsync();
             }
             Check(App.Services is null, "验证结束仍未建立真实服务容器");
-            Check(_fixture.Transfer.CloneCount == (ScreenshotsOnly ? 0 : 3) && _fixture.Transfer.PullCount == 0,
-                "传输调用仅为受控内存 Fake：截图模式零次，完整验证含失败/取消/成功三次克隆，零次拉取");
+            Check(_fixture.Transfer.CloneCount == (ScreenshotsOnly ? 0 : 3)
+                && _fixture.Transfer.PullCount == (ScreenshotsOnly ? 0 : 2) && _fixture.Transfer.TestCount == 0,
+                "传输调用仅为受控内存 Fake：截图模式零次，完整验证三次克隆、两次拉取、零次认证测试");
         }
         catch (Exception exception)
         {

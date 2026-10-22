@@ -10,7 +10,7 @@
 # ============================================================================
 param(
     [string]$Configuration = "Debug",
-    [string]$Version = "1.2.0",
+    [string]$Version = "1.2.5",
     [string]$Runtime = "win-x64",
     [switch]$Clean,
     [switch]$SkipTests,

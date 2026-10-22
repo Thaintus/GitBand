@@ -90,6 +90,7 @@
                         </Grid>
                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                             <ComboBox Width="148" ItemsSource="{Binding Accounts}" SelectedItem="{Binding SelectedGlobalAccount}"
+                                      IsEnabled="{Binding CanChangeGlobalMode}"
                                       AutomationProperties.Name="{loc:Loc GlobalMode.CurrentAccountLabel}">
                                 <ComboBox.ItemTemplate>
                                     <DataTemplate x:DataType="accounts:Account">

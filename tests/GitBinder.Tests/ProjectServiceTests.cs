@@ -66,7 +66,7 @@ public class ProjectServiceTests
     }
 
     [Fact]
-    public void Add_InvalidRepository_Fails()
+    public void Add_MissingDirectory_Fails()
     {
         var (service, _, _, _, gitService) = CreateSut();
         gitService.ValidateResult = false;
@@ -74,7 +74,7 @@ public class ProjectServiceTests
         var result = service.AddAsync(@"D:\not-a-repo").GetAwaiter().GetResult();
 
         Assert.False(result.IsSuccess);
-        Assert.Equal("PROJECT_REPOSITORY_NOT_FOUND", result.Error!.Code);
+        Assert.Equal("PROJECT_DIRECTORY_NOT_FOUND", result.Error!.Code);
     }
 
     [Fact]

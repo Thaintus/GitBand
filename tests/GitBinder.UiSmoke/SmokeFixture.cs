@@ -147,8 +147,10 @@ internal sealed class SmokeGitTransfer : IGitTransfer
 {
     public int CloneCount { get; private set; }
     public int PullCount { get; private set; }
+    public int TestCount { get; private set; }
     public Guid? UsedAccountId { get; private set; }
     public Func<string, string, Account, CancellationToken, Task<Result>>? OnClone { get; set; }
+    public Func<string, Account, CancellationToken, Task<Result>>? OnPull { get; set; }
 
     public Task<Result> CloneAsync(string url, string destination, Account account, CancellationToken ct = default)
     {
@@ -161,9 +163,14 @@ internal sealed class SmokeGitTransfer : IGitTransfer
     public Task<Result> PullAsync(string path, Account account, CancellationToken ct = default)
     {
         PullCount++;
-        return Task.FromResult(Result.Failure(new DomainError("PULL_FAILED")));
+        UsedAccountId = account.Id;
+        return OnPull?.Invoke(path, account, ct)
+            ?? Task.FromResult(Result.Failure(new DomainError("PULL_FAILED")));
     }
 
     public Task<Result> TestAsync(string path, Account account, CancellationToken ct = default)
-        => Task.FromResult(Result.Success());
+    {
+        TestCount++;
+        return Task.FromResult(Result.Success());
+    }
 }

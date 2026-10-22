@@ -6,6 +6,7 @@ using GitBinder.Application.Accounts;
 using GitBinder.Application.Common;
 using GitBinder.Application.GlobalMode;
 using GitBinder.Domain.Accounts;
+using GitBinder.Domain.Common;
 
 namespace GitBinder.Desktop.ViewModels;
 
@@ -17,6 +18,7 @@ public partial class MainViewModel : ViewModelBase
     private readonly ILocalizationService _localization;
     private readonly GlobalModeService _globalModeService;
     private readonly IAccountRepository _accountRepository;
+    private readonly SemaphoreSlim _globalModeLoadGate = new(1, 1);
 
     private readonly DashboardViewModel _dashboard;
     private readonly AccountsViewModel _accounts;
@@ -33,6 +35,8 @@ public partial class MainViewModel : ViewModelBase
     private ViewModelBase _currentPage = null!;
 
     public bool IsSettingsSelected => ReferenceEquals(CurrentPage, _settings);
+
+    public bool CanChangeGlobalMode => _projects.CanManageGroups;
 
     /// <summary>即使已切换页面，也不能通过 Escape 中断另一页的 Git 或持久化操作。</summary>
     public bool CanCloseWithEscape => !_projects.HasPendingOperations
@@ -84,6 +88,16 @@ public partial class MainViewModel : ViewModelBase
         _projects = projects;
         _platforms = platforms;
         _settings = settings;
+        _accounts.DataRefreshed += RefreshGlobalAccountStateAsync;
+
+        _projects.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName != nameof(ProjectsViewModel.CanManageGroups)) return;
+            OnPropertyChanged(nameof(CanChangeGlobalMode));
+            EnableGlobalModeCommand.NotifyCanExecuteChanged();
+            SwitchGlobalAccountCommand.NotifyCanExecuteChanged();
+            DisableGlobalModeCommand.NotifyCanExecuteChanged();
+        };
 
         _localization.CultureChanged += (_, _) => RefreshLocalization();
 
@@ -173,98 +187,91 @@ public partial class MainViewModel : ViewModelBase
     [RelayCommand]
     private async Task LoadGlobalModeAsync()
     {
-        // 载入账号列表（供切换选择）。
-        var all = await _accountRepository.GetAllAsync();
-        Accounts.Clear();
-        foreach (var a in all)
+        await _globalModeLoadGate.WaitAsync();
+        try
         {
-            Accounts.Add(a);
-        }
+            // 完整读完快照再更新控件，串行读取避免旧请求最后覆盖新账号状态
+            var all = await _accountRepository.GetAllAsync();
+            var config = await _globalModeService.GetConfigAsync();
+            Accounts.Clear();
+            foreach (var account in all) Accounts.Add(account);
+            GlobalModeEnabled = config.Enabled;
 
-        var config = await _globalModeService.GetConfigAsync();
-        GlobalModeEnabled = config.Enabled;
-
-        if (config.Enabled && config.GlobalAccountId is Guid id)
-        {
-            // ComboBox 以引用匹配 SelectedItem；必须使用 Accounts 集合内的实例，
-            // 否则全局账号已生效但下拉框会显示为空。
-            var account = Accounts.FirstOrDefault(a => a.Id == id);
-            GlobalAccountAlias = account?.DisplayAlias ?? string.Empty;
-            SelectedGlobalAccount = account;
+            if (config.Enabled && config.GlobalAccountId is Guid id)
+            {
+                // 下拉框以引用匹配选项，使用本次集合内的账号实例
+                var account = Accounts.FirstOrDefault(a => a.Id == id);
+                GlobalAccountAlias = account?.DisplayAlias ?? string.Empty;
+                SelectedGlobalAccount = account;
+            }
+            else
+            {
+                var def = Accounts.FirstOrDefault(a => a.IsDefault && a.Enabled);
+                GlobalAccountAlias = def?.DisplayAlias ?? string.Empty;
+                SelectedGlobalAccount = def;
+            }
+            OnPropertyChanged(nameof(GlobalModeStatusText));
         }
-        else
-        {
-            var def = Accounts.FirstOrDefault(a => a.IsDefault && a.Enabled);
-            GlobalAccountAlias = def?.DisplayAlias ?? string.Empty;
-            SelectedGlobalAccount = def;
-        }
-
-        OnPropertyChanged(nameof(GlobalModeStatusText));
+        finally { _globalModeLoadGate.Release(); }
     }
 
-    [RelayCommand]
-    private async Task EnableGlobalModeAsync()
+    private async Task RefreshGlobalAccountStateAsync()
     {
-        GlobalModeFeedback = string.Empty;
+        try { await LoadGlobalModeAsync(); }
+        catch (Exception) { GlobalModeFeedback = _localization.GetString("Accounts.RefreshFailed"); }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanChangeGlobalMode))]
+    private Task EnableGlobalModeAsync()
+    {
         var id = SelectedGlobalAccount?.Id;
-        var result = await _globalModeService.EnableAsync(id);
-        await LoadGlobalModeAsync();
-        await _projects.LoadAsync();
-        if (result.IsSuccess)
-        {
-            return;
-        }
-
-        GlobalModeFeedback = _localization.GetString(result.Error!.Code, result.Error.Arguments);
+        return RunGlobalModeOperationAsync(() => _globalModeService.EnableAsync(id));
     }
 
-    [RelayCommand]
-    private async Task SwitchGlobalAccountAsync()
+    [RelayCommand(CanExecute = nameof(CanChangeGlobalMode))]
+    private Task SwitchGlobalAccountAsync()
     {
-        if (SelectedGlobalAccount is null)
-        {
-            return;
-        }
-
-        GlobalModeFeedback = string.Empty;
-        var result = await _globalModeService.SwitchAccountAsync(SelectedGlobalAccount.Id);
-        await LoadGlobalModeAsync();
-        await _projects.LoadAsync();
-        if (result.IsSuccess)
-        {
-            return;
-        }
-
-        GlobalModeFeedback = _localization.GetString(result.Error!.Code, result.Error.Arguments);
+        var id = SelectedGlobalAccount?.Id;
+        return id.HasValue
+            ? RunGlobalModeOperationAsync(() => _globalModeService.SwitchAccountAsync(id.Value))
+            : Task.CompletedTask;
     }
 
-    [RelayCommand]
-    private async Task DisableGlobalModeAsync()
-    {
-        GlobalModeFeedback = string.Empty;
-        var result = await _globalModeService.DisableAsync();
-        await LoadGlobalModeAsync();
-        await _projects.LoadAsync();
-        if (result.IsSuccess)
-        {
-            return;
-        }
+    [RelayCommand(CanExecute = nameof(CanChangeGlobalMode))]
+    private Task DisableGlobalModeAsync() => RunGlobalModeOperationAsync(() => _globalModeService.DisableAsync());
 
-        GlobalModeFeedback = _localization.GetString(result.Error!.Code, result.Error.Arguments);
+    private async Task RunGlobalModeOperationAsync(Func<Task<Result>> operation)
+    {
+        // 全局模式会重应用多个项目的身份，与项目写入互斥，但不阻止导航
+        if (!_projects.TryBeginExternalOperation()) return;
+        try
+        {
+            GlobalModeFeedback = string.Empty;
+            var result = await operation();
+            await LoadGlobalModeAsync();
+            await _projects.ReloadAfterExternalOperationAsync();
+            if (!result.IsSuccess)
+                GlobalModeFeedback = _localization.GetString(result.Error!.Code, result.Error.Arguments);
+        }
+        catch (Exception)
+        {
+            GlobalModeFeedback = _localization.GetString("GlobalMode.OperationFailed");
+        }
+        finally { _projects.EndExternalOperation(); }
     }
 
     public async Task InitializeAsync()
     {
-        var globalModeResult = await _globalModeService.EnsureAppliedAsync();
-        if (!globalModeResult.IsSuccess)
+        // 启动重应用也可能写入多个仓库，必须在首次 await 前取得与页面操作相同的门禁
+        await RunGlobalModeOperationAsync(() => _globalModeService.EnsureAppliedAsync());
+        try
         {
-            GlobalModeFeedback = _localization.GetString(
-                globalModeResult.Error!.Code,
-                globalModeResult.Error.Arguments);
+            await _dashboard.LoadAsync();
         }
-
-        await LoadGlobalModeAsync();
-        await _dashboard.LoadAsync();
+        catch (Exception)
+        {
+            GlobalModeFeedback = _localization.GetString("Navigation.LoadFailed");
+        }
     }
 
     public string GlobalModeStatusText =>
@@ -291,21 +298,23 @@ public sealed partial class NavItem : ViewModelBase
 
     public ViewModelBase Page { get; }
 
-    public Geometry Icon { get; }
+    private readonly string _iconPath;
+    private Geometry? _icon;
+    public Geometry Icon => _icon ??= Geometry.Parse(_iconPath);
 
     public NavItem(string key, ViewModelBase page)
     {
         Key = key;
         Page = page;
         // 导航图标采用同一套 24px 线条几何，不依赖符号字体或额外图标包。
-        Icon = Geometry.Parse(key switch
+        _iconPath = key switch
         {
             "Nav.Dashboard" => "M3,3 H10 V10 H3 Z M14,3 H21 V10 H14 Z M3,14 H10 V21 H3 Z M14,14 H21 V21 H14 Z",
             "Nav.Accounts" => "M16,7 A4,4 0 1 1 8,7 A4,4 0 1 1 16,7 M4,21 V19 A8,8 0 0 1 20,19 V21",
             "Nav.Projects" => "M3,6 H9 L12,9 H21 V20 H3 Z M3,6 V4 H10 L13,7 H21 V9",
             "Nav.Platforms" => "M21,12 A9,9 0 1 1 3,12 A9,9 0 1 1 21,12 M3,12 H21 M12,3 C6,8 6,16 12,21 C18,16 18,8 12,3",
             _ => "M3,6 H9 M15,6 H21 M3,18 H15 M21,18 H21 M15,6 A3,3 0 1 1 9,6 A3,3 0 1 1 15,6 M21,18 A3,3 0 1 1 15,18 A3,3 0 1 1 21,18"
-        });
+        };
     }
 
     [ObservableProperty]

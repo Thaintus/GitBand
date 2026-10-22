@@ -36,13 +36,14 @@ public sealed class GitTransferTests : IDisposable
         var result = await sut.CloneAsync("https://example.org/team/repo.git", Path.Combine(_root, "new"), account);
 
         Assert.True(result.IsSuccess);
-        var call = Assert.Single(executor.Calls);
+        var call = Assert.Single(executor.Calls, c => c.Args.Contains("clone"));
         Assert.Contains("credential.helper=", call.Args);
         Assert.Contains(call.Args, arg => arg.Contains("--account-id " + account.Id.ToString("D")));
         Assert.DoesNotContain(call.Args, arg => arg.Contains(account.HttpsSecretId));
         Assert.Contains("--no-recurse-submodules", call.Args);
         Assert.Equal("0", call.Options.Environment["GIT_TERMINAL_PROMPT"]);
-        Assert.Equal(OperatingSystem.IsWindows() ? "NUL" : "/dev/null", call.Options.Environment["GIT_CONFIG_GLOBAL"]);
+        Assert.False(call.Options.Environment.ContainsKey("GIT_CONFIG_GLOBAL"));
+        Assert.False(call.Options.Environment.ContainsKey("GIT_CONFIG_NOSYSTEM"));
         Assert.Null(call.Options.Environment["GIT_DIR"]);
         Assert.Equal(TimeSpan.FromMinutes(30), call.Options.Timeout);
     }
@@ -68,7 +69,7 @@ public sealed class GitTransferTests : IDisposable
             "git@example.org:repo.git", Path.Combine(_root, "new"),
             new Account { AuthenticationType = AuthenticationType.Ssh, SshPrivateKeyPath = key });
         Assert.True(result.IsSuccess);
-        var ssh = Assert.Single(executor.Calls).Options.Environment["GIT_SSH_COMMAND"];
+        var ssh = Assert.Single(executor.Calls, c => c.Args.Contains("clone")).Options.Environment["GIT_SSH_COMMAND"];
         Assert.Contains("IdentitiesOnly=yes", ssh);
         Assert.Contains("StrictHostKeyChecking=yes", ssh);
         Assert.Contains("'\\''", ssh);
@@ -119,24 +120,153 @@ public sealed class GitTransferTests : IDisposable
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task Pull_RequiresOriginUpstreamAndForcesFastForward(bool upstream)
+    public async Task Pull_UsesTrackingOrSameNameFallbackAndForcesFastForward(bool upstream)
     {
         var helper = Path.Combine(_root, "helper.exe");
         File.WriteAllText(helper, "");
         var executor = new RecordingExecutor(_root) { HasUpstream = upstream };
         var result = await new GitTransfer(executor, new Locator(), helper).PullAsync(_root,
             new Account { AuthenticationType = AuthenticationType.Https, HttpsSecretId = "dummy" });
-        Assert.Equal(upstream, result.IsSuccess);
-        if (!upstream)
-        {
-            Assert.Equal("PULL_NO_UPSTREAM", result.Error!.Code);
-            Assert.DoesNotContain(executor.Calls, c => c.Args.Contains("pull"));
-            return;
-        }
-        var pull = Assert.Single(executor.Calls.Where(c => c.Args.Contains("pull")));
+        Assert.True(result.IsSuccess);
+        var pull = Assert.Single(executor.Calls, c => c.Args.Contains("pull"));
         Assert.Contains("--ff-only", pull.Args);
         Assert.Contains("--no-rebase", pull.Args);
         Assert.Contains("refs/heads/main", pull.Args);
+    }
+
+    [Fact]
+    public async Task Pull_UsesConfiguredNonOriginRemoteAndDoesNotChangeItsUrl()
+    {
+        var helper = Path.Combine(_root, "helper.exe");
+        File.WriteAllText(helper, "fixture only");
+        var executor = new RecordingExecutor(_root) { UpstreamRemote = "company" };
+
+        var result = await new GitTransfer(executor, new Locator(), helper).PullAsync(_root,
+            new Account { AuthenticationType = AuthenticationType.Https, HttpsSecretId = "fixture-id" });
+
+        Assert.True(result.IsSuccess);
+        var pull = Assert.Single(executor.Calls, c => c.Args.Contains("pull"));
+        Assert.Equal(new[] { "company", "refs/heads/main" }, pull.Args.TakeLast(2));
+        Assert.DoesNotContain(executor.Calls, c => c.Args.Contains("set-url"));
+    }
+
+    [Fact]
+    public async Task Pull_UnbornRepositoryDiscoversDefaultBranchAndSavesTrackingAfterSuccess()
+    {
+        var helper = Path.Combine(_root, "helper.exe");
+        File.WriteAllText(helper, "fixture only");
+        var executor = new RecordingExecutor(_root) { HasUpstream = false, HasCommits = false, DefaultBranch = "trunk" };
+
+        var result = await new GitTransfer(executor, new Locator(), helper).PullAsync(_root,
+            new Account { AuthenticationType = AuthenticationType.Https, HttpsSecretId = "fixture-id" });
+
+        Assert.True(result.IsSuccess);
+        var pull = Assert.Single(executor.Calls, c => c.Args.Contains("pull"));
+        Assert.Equal("refs/heads/trunk", pull.Args[^1]);
+        var writes = executor.Calls.Where(c => c.Args.Contains("--replace-all")).ToArray();
+        Assert.Equal(2, writes.Length);
+        Assert.Contains(writes, c => c.Args.Contains("branch.main.remote") && c.Args[^1] == "origin");
+        Assert.Contains(writes, c => c.Args.Contains("branch.main.merge") && c.Args[^1] == "refs/heads/trunk");
+        Assert.True(executor.Calls.IndexOf(pull) < executor.Calls.IndexOf(writes[0]));
+        Assert.DoesNotContain(executor.Calls, c => c.Args.Contains("reset") || c.Args.Contains("stash"));
+    }
+
+    [Fact]
+    public async Task Pull_FailedFirstPullDoesNotSaveGuessedTracking()
+    {
+        var helper = Path.Combine(_root, "helper.exe");
+        File.WriteAllText(helper, "fixture only");
+        var executor = new RecordingExecutor(_root)
+        {
+            HasUpstream = false,
+            TransferFailure = new CommandResult { ExitCode = 1, StdErr = "would be overwritten" },
+        };
+        var result = await new GitTransfer(executor, new Locator(), helper).PullAsync(_root,
+            new Account { AuthenticationType = AuthenticationType.Https, HttpsSecretId = "fixture-id" });
+
+        Assert.Equal("PULL_DIRTY", result.Error!.Code);
+        Assert.DoesNotContain(executor.Calls, c => c.Args.Contains("--replace-all"));
+    }
+
+    [Fact]
+    public async Task Pull_DetachedHeadStopsBeforeConnecting()
+    {
+        var executor = new RecordingExecutor(_root) { Detached = true };
+        var result = await new GitTransfer(executor, new Locator()).PullAsync(_root, new Account());
+
+        Assert.Equal("PULL_DETACHED_HEAD", result.Error!.Code);
+        Assert.DoesNotContain(executor.Calls, c => c.Args.Contains("pull") || c.Args.Contains("ls-remote"));
+    }
+
+    [Fact]
+    public async Task Pull_TrackingWriteFailureReportsCodeAlreadyPulled()
+    {
+        var helper = Path.Combine(_root, "helper.exe");
+        File.WriteAllText(helper, "fixture only");
+        var executor = new RecordingExecutor(_root) { HasUpstream = false, TrackingWriteFails = true };
+        var result = await new GitTransfer(executor, new Locator(), helper).PullAsync(_root,
+            new Account { AuthenticationType = AuthenticationType.Https, HttpsSecretId = "fixture-id" });
+
+        Assert.Equal("PULL_TRACKING_SAVE_FAILED", result.Error!.Code);
+        Assert.Single(executor.Calls, c => c.Args.Contains("pull"));
+        Assert.DoesNotContain(executor.Calls, c => c.Args.Contains("reset") || c.Args.Contains("stash"));
+    }
+
+    [Fact]
+    public async Task Test_SshConfigurationFailureStopsBeforeConnecting()
+    {
+        var key = Path.Combine(_root, "selected-key");
+        File.WriteAllText(key, "fixture only");
+        var executor = new RecordingExecutor(_root) { OriginUrl = "git@example.org:repo.git", SshConfigurationFails = true };
+        var result = await new GitTransfer(executor, new Locator()).TestAsync(_root,
+            new Account { AuthenticationType = AuthenticationType.Ssh, SshPrivateKeyPath = key });
+
+        Assert.Equal("TRANSFER_SSH_CONFIG_FAILED", result.Error!.Code);
+        Assert.DoesNotContain(executor.Calls, c => c.Args.Contains("ls-remote"));
+    }
+
+    [Fact]
+    public async Task Test_SshPreservesConnectionSettingsWithoutCopyingAnotherIdentity()
+    {
+        var key = Path.Combine(_root, "selected-key");
+        File.WriteAllText(key, "fixture only");
+        var executor = new RecordingExecutor(_root)
+        {
+            OriginUrl = "git@work-alias:team/repo.git",
+            SshConfiguration = "hostname git.example.org\nuser git\nport 2222\nproxyjump bastion\nidentityfile unwanted-key\nstricthostkeychecking no\n",
+            OnCall = (args, options) =>
+            {
+                if (!args.Contains("ls-remote")) return;
+                var ssh = options.Environment["GIT_SSH_COMMAND"]!;
+                var quoted = ssh[(ssh.IndexOf(" -F ", StringComparison.Ordinal) + 4)..ssh.IndexOf(" -i ", StringComparison.Ordinal)];
+                var profile = File.ReadAllText(quoted[1..^1].Replace("'\\''", "'"));
+                Assert.Contains("Host work-alias", profile);
+                Assert.Contains("hostname git.example.org", profile);
+                Assert.Contains("port 2222", profile);
+                Assert.Contains("proxyjump bastion", profile);
+                Assert.Contains("Host * !work-alias", profile);
+                Assert.DoesNotContain("unwanted-key", profile);
+                Assert.DoesNotContain("stricthostkeychecking no", profile);
+                Assert.Contains("StrictHostKeyChecking=yes", ssh);
+            },
+        };
+        var result = await new GitTransfer(executor, new Locator()).TestAsync(_root,
+            new Account { AuthenticationType = AuthenticationType.Ssh, SshPrivateKeyPath = key });
+
+        Assert.True(result.IsSuccess);
+        Assert.Single(executor.Calls, c => c.Args.Contains("-G"));
+    }
+
+    [Fact]
+    public async Task Clone_AddressRewriteIsValidatedBeforePreparingCredentials()
+    {
+        var executor = new RecordingExecutor(_root) { ResolvedCloneUrl = "ext::untrusted-command" };
+        var result = await new GitTransfer(executor, new Locator()).CloneAsync("https://example.org/repo.git",
+            Path.Combine(_root, "new"), new Account());
+
+        Assert.Equal("TRANSFER_URL_INVALID", result.Error!.Code);
+        Assert.Single(executor.Calls);
+        Assert.DoesNotContain(executor.Calls, c => c.Args.Contains("clone"));
     }
 
     public void Dispose() => Directory.Delete(_root, true);
@@ -155,7 +285,7 @@ public sealed class GitTransferTests : IDisposable
         Assert.Contains("remote", executor.Calls[0].Args);
         Assert.Contains("get-url", executor.Calls[0].Args);
         var test = executor.Calls[1];
-        Assert.Equal(new[] { "ls-remote", "--", executor.OriginUrl }, test.Args.TakeLast(3));
+        Assert.Equal(new[] { "ls-remote", "--", "origin" }, test.Args.TakeLast(3));
         Assert.Contains("credential.helper=", test.Args);
         Assert.Contains("credential." + executor.OriginUrl + ".helper=", test.Args);
         Assert.Contains(test.Args, arg => arg.Contains("--account-id " + account.Id.ToString("D")));
@@ -172,8 +302,8 @@ public sealed class GitTransferTests : IDisposable
             Assert.Equal("Never", call.Options.Environment["GCM_INTERACTIVE"]);
             Assert.Equal("", call.Options.Environment["GIT_ASKPASS"]);
             Assert.Equal("", call.Options.Environment["SSH_ASKPASS"]);
-            Assert.Equal(OperatingSystem.IsWindows() ? "NUL" : "/dev/null", call.Options.Environment["GIT_CONFIG_GLOBAL"]);
-            Assert.Equal("1", call.Options.Environment["GIT_CONFIG_NOSYSTEM"]);
+            Assert.False(call.Options.Environment.ContainsKey("GIT_CONFIG_GLOBAL"));
+            Assert.False(call.Options.Environment.ContainsKey("GIT_CONFIG_NOSYSTEM"));
             Assert.Equal("0", call.Options.Environment["GIT_CONFIG_COUNT"]);
             Assert.Equal("", call.Options.Environment["GIT_CONFIG_PARAMETERS"]);
             Assert.Null(call.Options.Environment["GIT_DIR"]);
@@ -224,10 +354,11 @@ public sealed class GitTransferTests : IDisposable
             {
                 if (!args.Contains("ls-remote")) return;
                 var ssh = options.Environment["GIT_SSH_COMMAND"]!;
-                var quoted = ssh["ssh -F ".Length..ssh.IndexOf(" -i ", StringComparison.Ordinal)];
+                var quoted = ssh[(ssh.IndexOf(" -F ", StringComparison.Ordinal) + 4)..ssh.IndexOf(" -i ", StringComparison.Ordinal)];
                 config = quoted[1..^1].Replace("'\\''", "'");
                 Assert.True(File.Exists(config));
-                Assert.Equal(string.Empty, File.ReadAllText(config));
+                Assert.Contains("hostname example.org", File.ReadAllText(config));
+                Assert.DoesNotContain("identityfile", File.ReadAllText(config));
                 Assert.Contains("IdentitiesOnly=yes", ssh);
                 Assert.Contains("BatchMode=yes", ssh);
                 Assert.Contains("StrictHostKeyChecking=yes", ssh);
@@ -243,7 +374,7 @@ public sealed class GitTransferTests : IDisposable
         Assert.NotNull(config);
         Assert.False(File.Exists(config));
         var test = Assert.Single(executor.Calls, c => c.Args.Contains("ls-remote"));
-        Assert.Equal(executor.OriginUrl, test.Args[^1]);
+        Assert.Equal("origin", test.Args[^1]);
         if (fail) Assert.Equal("TRANSFER_AUTH_FAILED", result.Error!.Code);
     }
 
@@ -261,7 +392,7 @@ public sealed class GitTransferTests : IDisposable
             {
                 if (!args.Contains("ls-remote")) return;
                 var ssh = options.Environment["GIT_SSH_COMMAND"]!;
-                var quoted = ssh["ssh -F ".Length..ssh.IndexOf(" -i ", StringComparison.Ordinal)];
+                var quoted = ssh[(ssh.IndexOf(" -F ", StringComparison.Ordinal) + 4)..ssh.IndexOf(" -i ", StringComparison.Ordinal)];
                 config = quoted[1..^1].Replace("'\\''", "'");
                 Assert.True(File.Exists(config));
                 cancellation.Cancel();
@@ -341,22 +472,24 @@ public sealed class GitTransferTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Clone_SshUsesRealEmptyConfig_AndCleansUpAfterSuccessOrFailure(bool fail)
+    public async Task Clone_SshUsesConnectionOnlyConfig_AndCleansUpAfterSuccessOrFailure(bool fail)
     {
         var key = Path.Combine(_root, "key");
         File.WriteAllText(key, "fake key; never read by SSH");
         string? config = null;
         var executor = new RecordingExecutor(_root)
         {
-            Failure = fail ? new CommandResult { ExitCode = 128, StdErr = "Permission denied (publickey)." } : null,
-            OnCall = (_, options) =>
+            TransferFailure = fail ? new CommandResult { ExitCode = 128, StdErr = "Permission denied (publickey)." } : null,
+            OnCall = (args, options) =>
             {
+                if (!args.Contains("clone")) return;
                 var ssh = options.Environment["GIT_SSH_COMMAND"]!;
-                var quoted = ssh["ssh -F ".Length..ssh.IndexOf(" -i ", StringComparison.Ordinal)];
+                var quoted = ssh[(ssh.IndexOf(" -F ", StringComparison.Ordinal) + 4)..ssh.IndexOf(" -i ", StringComparison.Ordinal)];
                 config = quoted[1..^1].Replace("'\\''", "'");
                 Assert.True(Path.IsPathFullyQualified(config));
                 Assert.True(File.Exists(config));
-                Assert.Equal(string.Empty, File.ReadAllText(config));
+                Assert.Contains("hostname example.org", File.ReadAllText(config));
+                Assert.DoesNotContain("identityfile", File.ReadAllText(config));
                 Assert.Contains("IdentitiesOnly=yes", ssh);
                 Assert.Contains("StrictHostKeyChecking=yes", ssh);
             },
@@ -380,6 +513,14 @@ public sealed class GitTransferTests : IDisposable
         public List<(string[] Args, CommandExecutionOptions Options)> Calls { get; } = [];
         public string StatusOutput { get; init; } = "";
         public bool HasUpstream { get; init; } = true;
+        public string UpstreamRemote { get; init; } = "origin";
+        public bool HasCommits { get; init; } = true;
+        public bool Detached { get; init; }
+        public bool TrackingWriteFails { get; init; }
+        public bool SshConfigurationFails { get; init; }
+        public string? ResolvedCloneUrl { get; init; }
+        public string DefaultBranch { get; init; } = "main";
+        public string? SshConfiguration { get; init; }
         public string OriginUrl { get; init; } = "https://example.org/team/repo.git";
         public Action<string[], CommandExecutionOptions>? OnCall { get; init; }
         public CommandResult? Failure { get; init; }
@@ -394,18 +535,32 @@ public sealed class GitTransferTests : IDisposable
             Calls.Add((arguments.ToArray(), options));
             OnCall?.Invoke(arguments.ToArray(), options);
             if (Failure is not null) return Task.FromResult(Failure);
+            if (arguments[0] == "-G")
+                return Task.FromResult(new CommandResult { ExitCode = SshConfigurationFails ? 255 : 0,
+                    StdOut = SshConfiguration ?? "hostname example.org\nuser git\nport 22\nidentityfile unwanted-key\n" });
             var index = 0;
             while (arguments[index] == "-c") index += 2;
             var args = arguments.Skip(index).ToArray();
+            if (args[0] == "ls-remote" && args.Contains("--get-url"))
+                return Task.FromResult(new CommandResult { ExitCode = 0, StdOut = ResolvedCloneUrl ?? args[^1] });
             if ((args[0] is "ls-remote" or "clone" or "pull") && TransferFailure is not null)
                 return Task.FromResult(TransferFailure);
+            if (args[0] == "config" && args.Contains("--get") && !HasUpstream)
+                return Task.FromResult(new CommandResult { ExitCode = 1 });
+            if (args[0] == "config" && args.Contains("--replace-all") && TrackingWriteFails)
+                return Task.FromResult(new CommandResult { ExitCode = 1 });
+            if (args[0] == "rev-parse" && args.Contains("--verify") && !HasCommits
+                || args[0] == "symbolic-ref" && Detached)
+                return Task.FromResult(new CommandResult { ExitCode = 1 });
             var output = args[0] switch
             {
                 "status" => StatusOutput,
+                "rev-parse" when args.Contains("--show-toplevel") => root,
                 "rev-parse" => Path.Combine(root, ".git", args[^1]),
                 "symbolic-ref" => "main",
-                "config" => args[^1].EndsWith(".remote") ? (HasUpstream ? "origin" : "") : "refs/heads/main",
+                "config" => args[^1].EndsWith(".remote") ? UpstreamRemote : "refs/heads/main",
                 "remote" => OriginUrl,
+                "ls-remote" when args.Contains("--symref") => $"ref: refs/heads/{DefaultBranch}\tHEAD\n",
                 _ => "",
             };
             return Task.FromResult(new CommandResult { ExitCode = 0, StdOut = output });

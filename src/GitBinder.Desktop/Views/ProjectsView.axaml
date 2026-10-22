@@ -9,13 +9,13 @@
              Classes="projects-page"
              x:DataType="vm:ProjectsViewModel">
 
-    <Grid Margin="28,24" RowDefinitions="Auto,Auto,*,Auto">
-        <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="16" IsEnabled="{Binding CanManageProjects}">
+    <Grid Margin="28,24,28,12" RowDefinitions="Auto,Auto,*,Auto">
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="16">
             <StackPanel Spacing="5">
                 <TextBlock Classes="page-title" Text="{loc:Loc Nav.Projects}" />
                 <TextBlock Classes="page-description" Text="{loc:Loc Projects.Description}" />
             </StackPanel>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" IsEnabled="{Binding CanManageProjects}">
                 <Button Command="{Binding CreateCommand}" Classes="secondary project-entry" ToolTip.Tip="{loc:Loc Projects.AddHint}">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <Path Classes="action-glyph" Data="M3,7 H9 L11,10 H21 V21 H3 Z M3,7 V4 H9 L11,7 H19 M12,12 V18 M9,15 H15" />
@@ -55,7 +55,7 @@
             </Grid>
         </Border>
 
-        <Grid Grid.Row="2" Margin="0,14,0,0" ColumnDefinitions="170,*" ColumnSpacing="14" IsEnabled="{Binding CanManageProjects}">
+        <Grid Grid.Row="2" Margin="0,14,0,0" ColumnDefinitions="170,*" ColumnSpacing="14">
             <Border Classes="project-sidebar">
                 <Grid RowDefinitions="Auto,*" RowSpacing="10">
                     <Grid ColumnDefinitions="*,Auto" Margin="10,0,2,0">
@@ -65,6 +65,7 @@
                             <TextBlock Classes="caption" FontWeight="SemiBold" Text="{loc:Loc Groups.Title}" VerticalAlignment="Center" />
                         </StackPanel>
                         <Button Grid.Column="1" Classes="ghost icon-action small" Command="{Binding NewGroupCommand}"
+                                IsEnabled="{Binding CanManageGroups}"
                                 ToolTip.Tip="{loc:Loc Groups.New}" AutomationProperties.Name="{loc:Loc Groups.New}">
                             <Path Classes="action-glyph" Data="M12,5 V19 M5,12 H19" />
                         </Button>
@@ -78,12 +79,15 @@
                                         <TextBlock Classes="project-group-name" Text="{Binding Name}" Margin="2,0,0,0" VerticalAlignment="Center"
                                                    TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                                            <Panel IsEnabled="{Binding $parent[ListBox].((vm:ProjectsViewModel)DataContext).CanPullGroup}">
                                             <Button Classes="ghost icon-action small pull-action" IsEnabled="{Binding CanPull}"
                                                     ToolTip.Tip="{loc:Loc Groups.PullHint}" AutomationProperties.Name="{loc:Loc Groups.PullHint}"
                                                     Command="{Binding $parent[ListBox].((vm:ProjectsViewModel)DataContext).PullGroupCommand}" CommandParameter="{Binding}">
                                                 <Path Classes="action-glyph pull-glyph" Data="M20,4 L5,19 M5,19 V11 M5,19 H13" />
                                             </Button>
+                                            </Panel>
                                             <Button Classes="ghost icon-action small destructive" IsVisible="{Binding CanEdit}"
+                                                    IsEnabled="{Binding $parent[ListBox].((vm:ProjectsViewModel)DataContext).CanManageGroups}"
                                                     ToolTip.Tip="{loc:Loc Groups.Delete}" AutomationProperties.Name="{loc:Loc Groups.Delete}"
                                                     Command="{Binding $parent[ListBox].((vm:ProjectsViewModel)DataContext).DeleteGroupCommand}" CommandParameter="{Binding}">
                                                 <Path Classes="action-glyph" Data="M5,5 L19,19 M19,5 L5,19" />
@@ -95,6 +99,7 @@
                                             <TextBlock Classes="project-group-count" Text="{Binding Count}" />
                                         </Border>
                                         <Button Grid.Column="1" Classes="ghost icon-action small" IsVisible="{Binding CanEdit}"
+                                                IsEnabled="{Binding $parent[ListBox].((vm:ProjectsViewModel)DataContext).CanManageGroups}"
                                                 ToolTip.Tip="{loc:Loc Groups.Rename}" AutomationProperties.Name="{loc:Loc Groups.Rename}"
                                                 Command="{Binding $parent[ListBox].((vm:ProjectsViewModel)DataContext).RenameGroupCommand}" CommandParameter="{Binding}">
                                             <Path Classes="action-glyph" Data="M14,5 L19,10 M4,20 L9,19 L21,7 L17,3 L5,15 Z" />
@@ -115,7 +120,7 @@
                                   Data="M4,3 H15 L20,8 V21 H4 Z M15,3 V8 H20 M8,12 H16 M8,16 H14" />
                         </Border>
                         <TextBlock Classes="page-description" Text="{loc:Loc Projects.Description}" TextAlignment="Center" />
-                        <Button Content="{loc:Loc Projects.Add}" Command="{Binding CreateCommand}" Classes="secondary" HorizontalAlignment="Center" />
+                        <Button Content="{loc:Loc Projects.Add}" Command="{Binding CreateCommand}" IsEnabled="{Binding CanManageProjects}" Classes="secondary" HorizontalAlignment="Center" />
                     </StackPanel>
                 </Border>
                 <Border Classes="card" Padding="32" IsVisible="{Binding HasNoMatches}">
@@ -127,9 +132,9 @@
                 <ItemsControl ItemsSource="{Binding FilteredItems}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <Border Classes="card project-card" Margin="0,0,0,10" IsEnabled="{Binding !IsPathSaving}">
+                            <Border Classes="card project-card" Margin="0,0,0,10">
                                 <Grid>
-                                    <Grid Margin="14,12" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
+                                    <Grid Margin="14,12" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto">
                                         <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
                                             <Border Width="32" Height="32" Classes="project-repository-icon" VerticalAlignment="Top">
                                                 <Path Width="18" Height="18" Stretch="Uniform" Stroke="{DynamicResource PrimaryBrush}" StrokeThickness="1.6"
@@ -140,18 +145,19 @@
                                                 <TextBlock Classes="project-name" Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
                                                 <WrapPanel Margin="0,0,-10,-3">
                                                     <TextBlock Classes="project-detail" Margin="0,0,10,3" Text="{Binding ProtocolLabel}" />
-                                                    <TextBlock Classes="project-detail" Margin="0,0,10,3" MaxWidth="240"
+                                                    <TextBlock Classes="project-detail" Margin="0,0,10,3" MaxWidth="240" IsVisible="{Binding HasRemote}"
                                                                Text="{Binding HostLabel}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding OriginUrlDisplay}" />
                                                 </WrapPanel>
                                             </StackPanel>
-                                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Top" Margin="0,4,0,0">
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Top" Margin="0,4,0,0"
+                                                        IsEnabled="{Binding CanManageProject}">
                                                 <Button Command="{Binding $parent[ItemsControl].((vm:ProjectsViewModel)DataContext).StartEditRemoteCommand}"
                                                         CommandParameter="{Binding}" Classes="ghost icon-action"
                                                         ToolTip.Tip="{loc:Loc Projects.EditRemote}" AutomationProperties.Name="{loc:Loc Projects.EditRemote}">
                                                     <Path Classes="action-glyph" Data="M10,13 C12,15 15,15 17,13 L20,10 C24,6 18,0 14,4 L12,6 M14,11 C12,9 9,9 7,11 L4,14 C0,18 6,24 10,20 L12,18" />
                                                 </Button>
                                                 <Button Command="{Binding $parent[ItemsControl].((vm:ProjectsViewModel)DataContext).PullCommand}"
-                                                        CommandParameter="{Binding}" Classes="ghost icon-action pull-action"
+                                                        CommandParameter="{Binding}" Classes="ghost icon-action pull-action" IsEnabled="{Binding CanPull}"
                                                         ToolTip.Tip="{loc:Loc Projects.PullHint}" AutomationProperties.Name="{loc:Loc Projects.Pull}">
                                                     <Path Classes="action-glyph pull-glyph" Data="M20,4 L5,19 M5,19 V11 M5,19 H13" />
                                                 </Button>
@@ -164,11 +170,16 @@
                                         </Grid>
                                         <StackPanel Grid.Row="1" Margin="0,8,0,0" IsVisible="{Binding HasMetadataWarning}">
                                             <TextBlock Classes="caption" Foreground="{DynamicResource DangerBrush}" Text="{Binding MetadataWarning}"
-                                                       IsVisible="{Binding HasMetadataWarning}" TextWrapping="Wrap" />
+                                                       IsVisible="{Binding HasMetadataError}" TextWrapping="Wrap" />
+                                            <TextBlock Classes="caption" Text="{Binding MetadataWarning}"
+                                                       IsVisible="{Binding HasMetadataNotice}" TextWrapping="Wrap" />
                                         </StackPanel>
-                                        <Border Grid.Row="2" Classes="inset project-remote-editor" Margin="0,10,0,0" IsVisible="{Binding IsRemoteEditorOpen}">
+                                        <Border Grid.Row="2" Classes="inset project-remote-editor" Margin="0,10,0,0" IsVisible="{Binding IsRemoteEditorOpen}"
+                                                IsEnabled="{Binding CanManageProject}">
                                             <StackPanel Spacing="10">
                                                 <TextBlock Classes="caption" FontWeight="SemiBold" Text="{loc:Loc Projects.RemoteUrl}" />
+                                                <TextBlock Classes="caption" Text="{loc:Loc Projects.InitializeGitHint}"
+                                                           IsVisible="{Binding IsLocalDirectory}" TextWrapping="Wrap" />
                                                 <TextBox Text="{Binding EditingOriginUrl, Mode=TwoWay}" PlaceholderText="{loc:Loc Projects.RemoteUrlPlaceholder}" />
                                                 <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
                                                     <Button Content="{Binding RemoteProtocolSwitchText}"
@@ -187,7 +198,7 @@
                                             <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
                                                 <TextBlock Classes="project-detail" VerticalAlignment="Center" Text="{loc:Loc Projects.BindAccount}" />
                                                 <ComboBox Grid.Column="1" Classes="compact" Width="128" ItemsSource="{Binding AvailableAccounts}" SelectedItem="{Binding SelectedBindingAccount}"
-                                                          SelectionChanged="OnBindingAccountSelectionChanged" IsEnabled="{Binding !IsSwitchingBinding}" VerticalAlignment="Center"
+                                                          SelectionChanged="OnBindingAccountSelectionChanged" IsEnabled="{Binding CanBindAccount}" VerticalAlignment="Center"
                                                           AutomationProperties.Name="{loc:Loc Projects.BindAccount}">
                                                     <ComboBox.ItemTemplate>
                                                         <DataTemplate>
@@ -197,17 +208,17 @@
                                                 </ComboBox>
                                                 <Button Grid.Column="2"
                                                         Command="{Binding $parent[ItemsControl].((vm:ProjectsViewModel)DataContext).TestBindingCommand}"
-                                                        CommandParameter="{Binding}" Classes="ghost icon-action small" IsEnabled="{Binding HasBinding}" VerticalAlignment="Center"
+                                                        CommandParameter="{Binding}" Classes="ghost icon-action small" IsEnabled="{Binding CanTest}" VerticalAlignment="Center"
                                                         ToolTip.Tip="{loc:Loc Common.Test}" AutomationProperties.Name="{loc:Loc Common.Test}">
                                                     <Path Classes="action-glyph" Data="M12,2 L21,6 V12 C21,17 17,21 12,23 C7,21 3,17 3,12 V6 Z M7,12 L10,15 L17,8" />
                                                 </Button>
                                                 <Button Grid.Column="3"
                                                         Command="{Binding $parent[ItemsControl].((vm:ProjectsViewModel)DataContext).UnbindCommand}"
-                                                        CommandParameter="{Binding}" Classes="ghost icon-action small destructive" IsEnabled="{Binding HasBinding}" VerticalAlignment="Center"
+                                                        CommandParameter="{Binding}" Classes="ghost icon-action small destructive" IsEnabled="{Binding CanUnbind}" VerticalAlignment="Center"
                                                         ToolTip.Tip="{loc:Loc Projects.Unbind}" AutomationProperties.Name="{loc:Loc Projects.Unbind}">
                                                     <Path Classes="action-glyph" Data="M9,17 H7 A5,5 0 0 1 7,7 M15,7 H17 A5,5 0 0 1 17,17 M8,12 H12 M3,3 L21,21" />
                                                 </Button>
-                                                <StackPanel Grid.Column="4" Spacing="2" VerticalAlignment="Center" Margin="8,0,0,0">
+                                                <StackPanel Grid.Column="4" Spacing="2" VerticalAlignment="Center" Margin="8,0,0,0" IsVisible="{Binding HasGitRepository}">
                                                     <TextBlock FontSize="11" Foreground="{DynamicResource SuccessBrush}" Text="{Binding EffectiveAccountLabel}"
                                                                TextAlignment="Right" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding EffectiveAccountLabel}" />
                                                     <TextBlock Classes="project-detail" Text="{Binding EffectiveReasonLabel}" TextAlignment="Right"
@@ -216,17 +227,21 @@
                                             </Grid>
                                         </Border>
                                         <Grid Grid.Row="4" Margin="0,8,0,0" ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="6">
-                                            <Path Width="14" Height="14" Stretch="Uniform" Stroke="{DynamicResource TextTertiaryBrush}" StrokeThickness="1.6" VerticalAlignment="Center"
-                                                  Data="M2,6 H10 L12,9 H22 V21 H2 Z M2,6 V3 H10 L12,6 H20 V9" />
+                                            <Button Classes="ghost icon-action small" VerticalAlignment="Center"
+                                                    Command="{Binding $parent[ItemsControl].((vm:ProjectsViewModel)DataContext).OpenDirectoryCommand}" CommandParameter="{Binding}"
+                                                    ToolTip.Tip="{loc:Loc Projects.OpenDirectory}" AutomationProperties.Name="{loc:Loc Projects.OpenDirectory}">
+                                                <Path Width="14" Height="14" Stretch="Uniform" Stroke="{DynamicResource TextTertiaryBrush}" StrokeThickness="1.6"
+                                                      Data="M2,6 H10 L12,9 H22 V21 H2 Z M2,6 V3 H10 L12,6 H20 V9" />
+                                            </Button>
                                             <TextBlock Grid.Column="1" Classes="project-detail" Text="{Binding PathText}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding PathText}" VerticalAlignment="Center" />
-                                            <Button Grid.Column="2" Classes="ghost icon-action small"
+                                            <Button Grid.Column="2" Classes="ghost icon-action small" IsEnabled="{Binding CanManageProject}"
                                                     ToolTip.Tip="{loc:Loc Projects.EditPath}" AutomationProperties.Name="{loc:Loc Projects.EditPath}"
                                                     Command="{Binding $parent[ItemsControl].((vm:ProjectsViewModel)DataContext).StartEditPathCommand}" CommandParameter="{Binding}">
                                                 <Path Classes="action-glyph" Data="M14,5 L19,10 M4,20 L9,19 L21,7 L17,3 L5,15 Z" />
                                             </Button>
                                             <ComboBox Grid.Column="3" Width="96" Margin="10,0,0,0" Classes="compact project-group-choice" ItemsSource="{Binding GroupChoices}"
                                                       SelectedItem="{Binding SelectedProjectGroup, Mode=TwoWay}" SelectionChanged="OnProjectGroupSelectionChanged"
-                                                      IsEnabled="{Binding !IsAssigningGroup}" ToolTip.Tip="{loc:Loc Groups.Assign}" AutomationProperties.Name="{loc:Loc Groups.Assign}">
+                                                      IsEnabled="{Binding CanAssignGroup}" ToolTip.Tip="{loc:Loc Groups.Assign}" AutomationProperties.Name="{loc:Loc Groups.Assign}">
                                                 <ComboBox.ItemTemplate>
                                                     <DataTemplate x:DataType="vm:ProjectGroupItemViewModel">
                                                         <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
@@ -234,7 +249,8 @@
                                                 </ComboBox.ItemTemplate>
                                             </ComboBox>
                                         </Grid>
-                                        <Border Grid.Row="5" Classes="inset project-path-editor" Margin="0,10,0,0" IsVisible="{Binding IsPathEditorOpen}">
+                                        <Border Grid.Row="5" Classes="inset project-path-editor" Margin="0,10,0,0" IsVisible="{Binding IsPathEditorOpen}"
+                                                IsEnabled="{Binding CanManageProject}">
                                             <StackPanel Spacing="10">
                                                 <TextBlock Classes="caption" Text="{loc:Loc Projects.PathHint}" TextWrapping="Wrap" />
                                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
@@ -251,6 +267,17 @@
                                                 </StackPanel>
                                             </StackPanel>
                                         </Border>
+                                        <StackPanel Grid.Row="6" Margin="0,10,0,0" Spacing="6" IsVisible="{Binding IsBusy}">
+                                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                                <ProgressBar IsIndeterminate="True" Height="3" VerticalAlignment="Center" />
+                                                <Button Grid.Column="1" Content="{loc:Loc Projects.CancelOperation}" Classes="ghost compact"
+                                                        IsVisible="{Binding CanCancelOperation}"
+                                                        Command="{Binding $parent[ItemsControl].((vm:ProjectsViewModel)DataContext).CancelProjectOperationCommand}"
+                                                        CommandParameter="{Binding}" />
+                                            </Grid>
+                                            <TextBlock Classes="caption" Text="{Binding OperationProgress}" TextWrapping="Wrap"
+                                                       IsVisible="{Binding HasOperationProgress}" />
+                                        </StackPanel>
                                     </Grid>
                                 </Grid>
                             </Border>
@@ -261,12 +288,13 @@
             </StackPanel>
         </ScrollViewer>
         </Grid>
-        <StackPanel Grid.Row="3" Margin="0,8,0,0" Spacing="6" IsVisible="{Binding !IsCloneEditorOpen}">
+        <StackPanel Grid.Row="3" Margin="0,8,0,0" Spacing="6" IsVisible="{Binding HasPageProgress}">
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="{Binding IsTransferBusy}">
                 <ProgressBar IsIndeterminate="True" Height="4" VerticalAlignment="Center" />
                 <Button Grid.Column="1" Content="{loc:Loc Projects.CancelTransfer}" Command="{Binding CancelTransferCommand}" Classes="ghost compact" />
             </Grid>
-            <TextBlock Text="{Binding OperationProgress}" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding OperationProgress}" IsVisible="{Binding HasOperationProgress}"
+                       Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" />
         </StackPanel>
     </Grid>
 </UserControl>

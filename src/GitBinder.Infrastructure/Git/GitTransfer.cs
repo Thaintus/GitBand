@@ -22,21 +22,25 @@ public sealed class GitTransfer(ICommandExecutor executor, IGitLocator locator, 
             stage = "git remote get-url origin";
             // 实际远程地址决定认证协议；不使用数据库缓存，也不读取继承环境指定的其他仓库。
             var origin = await executor.ExecuteWithOptionsAsync(git,
-                [.. BaseArguments(), "remote", "get-url", "origin"], repositoryPath, BaseOptions(timeout: timeout), ct);
+                [.. BaseArguments(), "remote", "get-url", "origin"], repositoryPath, TransferOptions(timeout: timeout), ct);
+            origin.ThrowIfTerminationUnconfirmed();
             ct.ThrowIfCancellationRequested();
             if (!origin.IsSuccess) return GitTransferFailure.FromCommand(stage, origin, ct);
             var url = origin.StdOut.Trim();
             if (!GitTransferRemote.TryParse(url, out var protocol)) return Fail("TRANSFER_URL_INVALID");
             stage = "SSH/HTTPS / prepare";
-            using var sshConfig = protocol == RemoteProtocol.Ssh ? new EmptySshConfig() : null;
-            var auth = BuildAuthentication(account, protocol, url, sshConfig?.Path);
+            var auth = await BuildAuthenticationAsync(git, account, protocol, url, repositoryPath, ct);
             if (!auth.IsSuccess) return Result.Failure(auth.Error!);
+            using var authentication = auth.Value!;
+            ct.ThrowIfCancellationRequested();
             var args = BaseArguments();
             args.AddRange(auth.Value!.Arguments);
-            args.AddRange(["ls-remote", "--", url]);
+            // 使用远程名称，让 Git 只应用一次 insteadOf，避免把已改写的 URL 再次改写
+            args.AddRange(["ls-remote", "--", "origin"]);
             var options = new CommandExecutionOptions { Timeout = timeout, Environment = auth.Value.Options.Environment };
             stage = "git ls-remote";
             var result = await executor.ExecuteWithOptionsAsync(git, args, repositoryPath, options, ct);
+            result.ThrowIfTerminationUnconfirmed();
             ct.ThrowIfCancellationRequested();
             return result.IsSuccess ? Result.Success() : GitTransferFailure.FromCommand(stage, result, ct);
         }
@@ -48,19 +52,33 @@ public sealed class GitTransfer(ICommandExecutor executor, IGitLocator locator, 
         var stage = "clone / prepare";
         try
         {
-            if (!GitTransferRemote.TryParse(remoteUrl, out var protocol)) return Fail("TRANSFER_URL_INVALID");
+            ct.ThrowIfCancellationRequested();
+            if (!GitTransferRemote.TryParse(remoteUrl, out _)) return Fail("TRANSFER_URL_INVALID");
             if (Directory.Exists(destination) || File.Exists(destination)) return Fail("CLONE_TARGET_EXISTS");
-            using var sshConfig = protocol == RemoteProtocol.Ssh ? new EmptySshConfig() : null;
-            var auth = BuildAuthentication(account, protocol, remoteUrl, sshConfig?.Path);
-            if (!auth.IsSuccess) return Result.Failure(auth.Error!);
             var git = await locator.LocateAsync(ct);
             if (string.IsNullOrWhiteSpace(git)) return Fail("TRANSFER_GIT_MISSING");
+            stage = "git ls-remote --get-url";
+            var resolved = await executor.ExecuteWithOptionsAsync(git,
+                [.. BaseArguments(), "ls-remote", "--get-url", "--", remoteUrl], Path.GetDirectoryName(destination),
+                TransferOptions(timeout: TimeSpan.FromSeconds(60)), ct);
+            resolved.ThrowIfTerminationUnconfirmed();
+            ct.ThrowIfCancellationRequested();
+            if (!resolved.IsSuccess) return GitTransferFailure.FromCommand(stage, resolved, ct);
+            var effectiveUrl = resolved.StdOut.Trim();
+            if (!GitTransferRemote.TryParse(effectiveUrl, out var protocol)) return Fail("TRANSFER_URL_INVALID");
+            stage = "SSH/HTTPS / prepare";
+            var auth = await BuildAuthenticationAsync(git, account, protocol, effectiveUrl, Path.GetDirectoryName(destination), ct);
+            if (!auth.IsSuccess) return Result.Failure(auth.Error!);
+            using var authentication = auth.Value!;
+            ct.ThrowIfCancellationRequested();
             var args = BaseArguments();
             args.AddRange(auth.Value!.Arguments);
             args.AddRange(["clone", "--no-recurse-submodules", "--", remoteUrl, destination]);
             stage = "git clone";
             var result = await executor.ExecuteWithOptionsAsync(git, args, Path.GetDirectoryName(destination),
                 auth.Value.Options, ct);
+            result.ThrowIfTerminationUnconfirmed();
+            ct.ThrowIfCancellationRequested();
             return result.IsSuccess ? Result.Success() : GitTransferFailure.FromCommand(stage, result, ct);
         }
         catch (Exception ex) { return GitTransferFailure.FromException(stage, ex, ct); }
@@ -69,19 +87,31 @@ public sealed class GitTransfer(ICommandExecutor executor, IGitLocator locator, 
     public async Task<Result> PullAsync(string repositoryPath, Account account, CancellationToken ct = default)
     {
         var stage = "pull / prepare";
+        var pullCompleted = false;
         try
         {
+            ct.ThrowIfCancellationRequested();
             if (!Directory.Exists(repositoryPath)) return Fail("PROJECT_REPOSITORY_NOT_FOUND", repositoryPath);
             var git = await locator.LocateAsync(ct);
             if (string.IsNullOrWhiteSpace(git)) return Fail("TRANSFER_GIT_MISSING");
-            // 拉取前只检查仓库操作状态与跟踪分支；本地改动是否冲突由 Git 快进更新判断。
-            // 不 stash，不 reset，不自动生成 merge commit。
+            // 优先使用当前分支的跟踪设置，本地改动是否冲突仍交给 Git 判断
+            // 不 stash、不 reset、不自动生成 merge commit
             async Task<CommandResult> Read(params string[] args)
             {
+                ct.ThrowIfCancellationRequested();
                 stage = "git " + args[0];
-                var options = BaseOptions();
-                return await executor.ExecuteWithOptionsAsync(git, [.. BaseArguments(), .. args], repositoryPath, options, ct);
+                var result = await executor.ExecuteWithOptionsAsync(git, [.. BaseArguments(), .. args], repositoryPath,
+                    TransferOptions(timeout: TimeSpan.FromSeconds(60)), ct);
+                result.ThrowIfTerminationUnconfirmed();
+                ct.ThrowIfCancellationRequested();
+                return result;
             }
+            var root = await Read("rev-parse", "--show-toplevel");
+            if (!root.IsSuccess) return GitTransferFailure.FromCommand(stage, root, ct);
+            if (!string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root.StdOut.Trim())),
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath)),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                return Fail("PROJECT_REPOSITORY_ROOT_MISMATCH");
             foreach (var marker in new[] { "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply" })
             {
                 var state = await Read("rev-parse", "--git-path", marker);
@@ -91,31 +121,75 @@ public sealed class GitTransfer(ICommandExecutor executor, IGitLocator locator, 
             }
             var branch = await Read("symbolic-ref", "--quiet", "--short", "HEAD");
             if (!branch.IsSuccess && branch.ExitCode != 1) return GitTransferFailure.FromCommand(stage, branch, ct);
-            if (!branch.IsSuccess || string.IsNullOrWhiteSpace(branch.StdOut)) return Fail("PULL_NO_UPSTREAM");
+            if (!branch.IsSuccess || string.IsNullOrWhiteSpace(branch.StdOut)) return Fail("PULL_DETACHED_HEAD");
             var name = branch.StdOut.Trim();
             var remote = await Read("config", "--get", $"branch.{name}.remote");
             if (!remote.IsSuccess && remote.ExitCode != 1) return GitTransferFailure.FromCommand(stage, remote, ct);
             var merge = await Read("config", "--get", $"branch.{name}.merge");
             if (!merge.IsSuccess && merge.ExitCode != 1) return GitTransferFailure.FromCommand(stage, merge, ct);
-            if (!remote.IsSuccess || remote.StdOut.Trim() != "origin"
-                || !merge.IsSuccess || !merge.StdOut.Trim().StartsWith("refs/heads/", StringComparison.Ordinal)
-                || merge.StdOut.Trim().Contains('\n')) return Fail("PULL_NO_UPSTREAM");
-            var origin = await Read("remote", "get-url", "origin");
+            if (remote.IsSuccess != merge.IsSuccess) return Fail("PULL_NO_UPSTREAM");
+            var remoteName = remote.IsSuccess ? remote.StdOut.Trim() : "origin";
+            if (string.IsNullOrWhiteSpace(remoteName) || remoteName == "." || remoteName.StartsWith('-')
+                || remoteName.Contains(':') || remoteName.Any(char.IsWhiteSpace) || remoteName.Any(char.IsControl))
+                return Fail("PULL_NO_UPSTREAM");
+            var needsTracking = !remote.IsSuccess || !merge.IsSuccess;
+            var targetRef = merge.IsSuccess ? merge.StdOut.Trim() : "refs/heads/" + name;
+            var origin = await Read("remote", "get-url", "--", remoteName);
             if (!origin.IsSuccess) return GitTransferFailure.FromCommand(stage, origin, ct);
             var url = origin.StdOut.Trim();
-            if (!origin.IsSuccess || !GitTransferRemote.TryParse(url, out var protocol)) return Fail("TRANSFER_URL_INVALID");
+            if (!GitTransferRemote.TryParse(url, out var protocol)) return Fail("TRANSFER_URL_INVALID");
             stage = "SSH/HTTPS / prepare";
-            using var sshConfig = protocol == RemoteProtocol.Ssh ? new EmptySshConfig() : null;
-            var auth = BuildAuthentication(account, protocol, url, sshConfig?.Path);
+            var auth = await BuildAuthenticationAsync(git, account, protocol, url, repositoryPath, ct);
             if (!auth.IsSuccess) return Result.Failure(auth.Error!);
+            using var authentication = auth.Value!;
+            ct.ThrowIfCancellationRequested();
+            if (needsTracking && !merge.IsSuccess)
+            {
+                var head = await Read("rev-parse", "--verify", "--quiet", "HEAD");
+                if (!head.IsSuccess && head.ExitCode != 1) return GitTransferFailure.FromCommand(stage, head, ct);
+                if (!head.IsSuccess)
+                {
+                    stage = "git ls-remote --symref";
+                    var discovery = await executor.ExecuteWithOptionsAsync(git,
+                        [.. BaseArguments(), .. authentication.Arguments, "ls-remote", "--symref", "--", remoteName, "HEAD"],
+                        repositoryPath, authentication.Options, ct);
+                    discovery.ThrowIfTerminationUnconfirmed();
+                    ct.ThrowIfCancellationRequested();
+                    if (!discovery.IsSuccess) return GitTransferFailure.FromCommand(stage, discovery, ct);
+                    var refs = discovery.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(line => line.TrimEnd('\r'))
+                        .Where(line => line.StartsWith("ref: refs/heads/", StringComparison.Ordinal) && line.EndsWith("\tHEAD", StringComparison.Ordinal))
+                        .Select(line => line[5..^5]).Distinct(StringComparer.Ordinal).ToArray();
+                    if (refs.Length != 1) return Fail("PULL_NO_UPSTREAM");
+                    targetRef = refs[0];
+                }
+            }
+            if (!targetRef.StartsWith("refs/heads/", StringComparison.Ordinal) || targetRef.Any(char.IsControl)
+                || !(await Read("check-ref-format", targetRef)).IsSuccess) return Fail("PULL_NO_UPSTREAM");
             var args = BaseArguments();
             args.AddRange(auth.Value!.Arguments);
-            args.AddRange(["pull", "--ff-only", "--no-rebase", "--no-recurse-submodules", "--", "origin", merge.StdOut.Trim()]);
+            args.AddRange(["pull", "--ff-only", "--no-rebase", "--no-recurse-submodules", "--", remoteName, targetRef]);
             stage = "git pull --ff-only";
+            ct.ThrowIfCancellationRequested();
             var result = await executor.ExecuteWithOptionsAsync(git, args, repositoryPath, auth.Value.Options, ct);
-            return result.IsSuccess ? Result.Success() : GitTransferFailure.FromCommand(stage, result, ct);
+            result.ThrowIfTerminationUnconfirmed();
+            if (!result.IsSuccess) return GitTransferFailure.FromCommand(stage, result, ct);
+            pullCompleted = true;
+            if (needsTracking)
+            {
+                // 首次拉取成功后保存明确的目标，不在失败时留下猜测的跟踪分支
+                var savedRemote = await Read("config", "--local", "--replace-all", $"branch.{name}.remote", remoteName);
+                var savedMerge = savedRemote.IsSuccess
+                    ? await Read("config", "--local", "--replace-all", $"branch.{name}.merge", targetRef) : savedRemote;
+                if (!savedRemote.IsSuccess || !savedMerge.IsSuccess) return Fail("PULL_TRACKING_SAVE_FAILED");
+            }
+            return Result.Success();
         }
-        catch (Exception ex) { return GitTransferFailure.FromException(stage, ex, ct); }
+        catch (Exception ex)
+        {
+            if (ex is CommandTerminationUnconfirmedException) return GitTransferFailure.FromException(stage, ex, ct);
+            return pullCompleted ? Fail("PULL_TRACKING_SAVE_FAILED") : GitTransferFailure.FromException(stage, ex, ct);
+        }
     }
 
     internal static List<string> BaseArguments() =>
@@ -123,7 +197,7 @@ public sealed class GitTransfer(ICommandExecutor executor, IGitLocator locator, 
         "-c", $"core.hooksPath={GitCommandPaths.NullDevice}", "-c", "core.fsmonitor=false", "-c", "submodule.recurse=false",
         "-c", "merge.autoStash=false", "-c", "rebase.autoStash=false",
         "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "protocol.ssh.allow=always",
-        "-c", "core.askPass=", "-c", "credential.interactive=false", "-c", "http.followRedirects=false",
+        "-c", "core.askPass=", "-c", "credential.interactive=false", "-c", "http.followRedirects=initial",
     ];
 
     internal static CommandExecutionOptions BaseOptions(string sshCommand = "", TimeSpan? timeout = null) => new()
@@ -138,15 +212,35 @@ public sealed class GitTransfer(ICommandExecutor executor, IGitLocator locator, 
             ["GIT_CONFIG_COUNT"] = "0", ["GIT_CONFIG_PARAMETERS"] = "",
             ["GIT_DIR"] = null, ["GIT_WORK_TREE"] = null, ["GIT_INDEX_FILE"] = null,
             ["GIT_COMMON_DIR"] = null, ["GIT_OBJECT_DIRECTORY"] = null, ["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = null,
+            ["GIT_CONFIG"] = null,
         },
     };
 
-    private sealed record Authentication(List<string> Arguments, CommandExecutionOptions Options);
+    // 传输保留本机 Git 的代理、证书、safe.directory 与 insteadOf，不继承仓库定位或环境配置注入
+    // 初始化仍使用完全隔离的 BaseOptions，不能因此套用用户的 init.templateDir 等设置
+    internal static CommandExecutionOptions TransferOptions(string sshCommand = "", TimeSpan? timeout = null)
+    {
+        var isolated = BaseOptions(sshCommand, timeout);
+        var environment = isolated.Environment.ToDictionary(pair => pair.Key, pair => pair.Value);
+        environment.Remove("GIT_CONFIG_GLOBAL");
+        environment.Remove("GIT_CONFIG_NOSYSTEM");
+        return new CommandExecutionOptions { Timeout = isolated.Timeout, Environment = environment };
+    }
 
-    private Result<Authentication> BuildAuthentication(Account account, RemoteProtocol protocol, string url, string? sshConfigPath)
+    private sealed record Authentication(List<string> Arguments, CommandExecutionOptions Options,
+        IDisposable? SshConfiguration = null) : IDisposable
+    {
+        public void Dispose() => SshConfiguration?.Dispose();
+    }
+
+    private async Task<Result<Authentication>> BuildAuthenticationAsync(string gitExecutable, Account account, RemoteProtocol protocol,
+        string url, string? workingDirectory, CancellationToken ct)
     {
         if (!account.Enabled) return Result<Authentication>.Failure(new DomainError("TRANSFER_ACCOUNT_INVALID"));
         var args = new List<string> { "-c", "credential.helper=", "-c", "http.extraHeader=" };
+        // 认证准备后即使远程配置被并发改写，也不能切换到未准备凭据的另一传输协议
+        args.AddRange(["-c", $"protocol.https.allow={(protocol == RemoteProtocol.Https ? "always" : "never")}",
+            "-c", $"protocol.ssh.allow={(protocol == RemoteProtocol.Ssh ? "always" : "never")}"]);
         if (protocol == RemoteProtocol.Https)
         {
             if (account.AuthenticationType is not (AuthenticationType.Https or AuthenticationType.Both)
@@ -158,18 +252,21 @@ public sealed class GitTransfer(ICommandExecutor executor, IGitLocator locator, 
             args.AddRange(["-c", $"credential.{url}.helper=", "-c",
                 $"credential.{url}.helper=!{GitCommandPaths.Quote(GitCommandPaths.ToShellPath(helper))} --account-id {account.Id:D}",
                 "-c", $"http.{url}.extraHeader="]);
-            return Result<Authentication>.Success(new(args, BaseOptions()));
+            return Result<Authentication>.Success(new(args, TransferOptions()));
         }
         if (account.AuthenticationType is not (AuthenticationType.Ssh or AuthenticationType.Both)
             || string.IsNullOrWhiteSpace(account.SshPrivateKeyPath) || !File.Exists(account.SshPrivateKeyPath))
             return Result<Authentication>.Failure(new DomainError("TRANSFER_SSH_REQUIRED"));
-        // IdentitiesOnly 仅允许此私钥；已解锁的同一密钥可由 Agent 签名，不尝试其他账号密钥。
+        var sshExecutable = await GitSshExecutableResolver.ResolveAsync(gitExecutable, ct);
+        var configuration = await SshConnectionConfig.CreateAsync(executor, sshExecutable, url, workingDirectory, ct);
+        if (!configuration.IsSuccess) return Result<Authentication>.Failure(configuration.Error!);
+        // 仅复制 SSH 连接设置，不复制其他 IdentityFile，已解锁的同一密钥可由 Agent 签名
         var keyPath = GitCommandPaths.ToShellPath(Path.GetFullPath(account.SshPrivateKeyPath));
-        var configPath = GitCommandPaths.ToShellPath(Path.GetFullPath(sshConfigPath!));
-        var ssh = $"{GitCommandPaths.SshExecutable} -F {GitCommandPaths.Quote(configPath)} -i {GitCommandPaths.Quote(keyPath)} -o IdentitiesOnly=yes"
+        var configPath = GitCommandPaths.ToShellPath(configuration.Value!.Path);
+        var ssh = $"{GitCommandPaths.Quote(GitCommandPaths.ToShellPath(sshExecutable))} -F {GitCommandPaths.Quote(configPath)} -i {GitCommandPaths.Quote(keyPath)} -o IdentitiesOnly=yes"
             + " -o BatchMode=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes";
         args.AddRange(["-c", $"core.sshCommand={ssh}"]);
-        return Result<Authentication>.Success(new(args, BaseOptions(ssh)));
+        return Result<Authentication>.Success(new(args, TransferOptions(ssh), configuration.Value));
     }
 
     private static Result Fail(string code, params string[] args) => Result.Failure(new DomainError(code, args));

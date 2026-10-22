@@ -17,7 +17,8 @@ public sealed class DomainError
         Arguments = arguments;
     }
 
-    public DomainError(string code, string? technicalDetails, params string[] arguments)
+    // 诊断构造必须显式提供参数数组，避免 (code, path) 被误解析为技术详情
+    public DomainError(string code, string? technicalDetails, string[] arguments)
     {
         Code = code;
         Arguments = arguments;

@@ -144,7 +144,7 @@ public sealed class BindingEmailPrivacyTests
         public Fixture()
         {
             Directory.CreateDirectory(_directory);
-            Project = new Project { RepositoryPath = _directory };
+            Project = new Project { RepositoryPath = _directory, GitDir = Path.Combine(_directory, ".git") };
             var projects = new FakeProjectRepository();
             projects.AddAsync(Project).GetAwaiter().GetResult();
             Accounts.AddAsync(Account).GetAwaiter().GetResult();

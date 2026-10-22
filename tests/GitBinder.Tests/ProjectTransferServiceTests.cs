@@ -111,6 +111,131 @@ public sealed class ProjectTransferServiceTests : IDisposable
         Assert.True(Directory.Exists(Path.Combine(_root, "new")));
     }
 
+    [Fact]
+    public async Task Pull_DifferentProjectsOverlap_ButSameProjectAndBatchAreRejected()
+    {
+        await _accounts.AddAsync(new Account { IsDefault = true });
+        var first = new GitBinder.Domain.Projects.Project { RepositoryPath = "one", GitDir = "one/.git" };
+        var second = new GitBinder.Domain.Projects.Project { RepositoryPath = "two", GitDir = "two/.git" };
+        await _projects.AddAsync(first);
+        await _projects.AddAsync(second);
+        var release = new TaskCompletionSource<Result>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _transfer.OnPull = (_, _, _) => release.Task;
+
+        var firstPull = _sut.PullAsync(first.Id);
+        var secondPull = _sut.PullAsync(second.Id);
+        try
+        {
+            Assert.Equal(2, _transfer.PullCount);
+            Assert.False(firstPull.IsCompleted);
+            Assert.False(secondPull.IsCompleted);
+            var duplicate = _sut.PullAsync(first.Id);
+            var batch = _sut.PullGroupAsync(null, true);
+            Assert.True(duplicate.IsCompletedSuccessfully);
+            Assert.True(batch.IsCompletedSuccessfully);
+            Assert.Equal("TRANSFER_BUSY", duplicate.Result.Error!.Code);
+            Assert.Equal("TRANSFER_BUSY", batch.Result.Error!.Code);
+        }
+        finally { release.TrySetResult(Result.Success()); }
+
+        Assert.True((await firstPull).IsSuccess);
+        Assert.True((await secondPull).IsSuccess);
+        Assert.True((await _sut.PullGroupAsync(null, true)).IsSuccess);
+    }
+
+    [Fact]
+    public async Task Clone_CanRunDuringPull_ButAnotherCloneAndBatchAreRejected()
+    {
+        var account = new Account { IsDefault = true };
+        await _accounts.AddAsync(account);
+        var project = new GitBinder.Domain.Projects.Project { RepositoryPath = "one", GitDir = "one/.git" };
+        await _projects.AddAsync(project);
+        var release = new TaskCompletionSource<Result>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _transfer.OnPull = (_, _, _) => release.Task;
+        _transfer.CloneResult = Result.Failure(new DomainError("CLONE_FAILED"));
+        Task<Result>? repeatedClone = null;
+        Task<Result<GroupPullReport>>? batchDuringClone = null;
+        _transfer.OnClone = _ =>
+        {
+            _transfer.OnClone = null;
+            repeatedClone = _sut.CloneAsync("https://example.org/repo.git", _root, "another", account.Id);
+            batchDuringClone = _sut.PullGroupAsync(null, true);
+        };
+
+        var pull = _sut.PullAsync(project.Id);
+        try
+        {
+            Assert.Equal("CLONE_FAILED", (await _sut.CloneAsync("https://example.org/repo.git", _root, "new", account.Id)).Error!.Code);
+            Assert.Equal(1, _transfer.CloneCount);
+            Assert.NotNull(repeatedClone);
+            Assert.NotNull(batchDuringClone);
+            Assert.True(repeatedClone.IsCompletedSuccessfully);
+            Assert.True(batchDuringClone.IsCompletedSuccessfully);
+            Assert.Equal("TRANSFER_BUSY", repeatedClone.Result.Error!.Code);
+            Assert.Equal("TRANSFER_BUSY", batchDuringClone.Result.Error!.Code);
+            Assert.False(pull.IsCompleted);
+        }
+        finally { release.TrySetResult(Result.Success()); }
+        Assert.True((await pull).IsSuccess);
+        Assert.True((await _sut.PullGroupAsync(null, true)).IsSuccess);
+        Assert.Equal("CLONE_FAILED", (await _sut.CloneAsync("https://example.org/repo.git", _root, "retry", account.Id)).Error!.Code);
+        Assert.Equal(2, _transfer.CloneCount);
+    }
+
+    [Fact]
+    public async Task Pull_ExceptionAndCancellationReleaseProjectReservation()
+    {
+        await _accounts.AddAsync(new Account { IsDefault = true });
+        var project = new GitBinder.Domain.Projects.Project { RepositoryPath = "one", GitDir = "one/.git" };
+        await _projects.AddAsync(project);
+        _transfer.OnPull = (_, _, _) => throw new IOException("fixture failure");
+        Assert.Equal("PULL_FAILED", (await _sut.PullAsync(project.Id)).Error!.Code);
+
+        using var cancellation = new CancellationTokenSource();
+        _transfer.OnPull = (_, _, _) =>
+        {
+            cancellation.Cancel();
+            throw new OperationCanceledException(cancellation.Token);
+        };
+        Assert.Equal("TRANSFER_CANCELLED", (await _sut.PullAsync(project.Id, cancellation.Token)).Error!.Code);
+
+        _transfer.OnPull = (_, _, _) => Task.FromResult(Result.Success());
+        Assert.True((await _sut.PullAsync(project.Id)).IsSuccess);
+        Assert.True((await _sut.PullGroupAsync(null, true)).IsSuccess);
+    }
+
+    [Fact]
+    public async Task GroupPull_ExcludesOtherOperations_AndReleasesReservation()
+    {
+        var account = new Account { IsDefault = true };
+        await _accounts.AddAsync(account);
+        var project = new GitBinder.Domain.Projects.Project { RepositoryPath = "one", GitDir = "one/.git" };
+        await _projects.AddAsync(project);
+        var release = new TaskCompletionSource<Result>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _transfer.OnPull = (_, _, _) => release.Task;
+
+        var batch = _sut.PullGroupAsync(null, true);
+        try
+        {
+            Assert.False(batch.IsCompleted);
+            var pull = _sut.PullAsync(project.Id);
+            var clone = _sut.CloneAsync("https://example.org/repo.git", _root, "new", account.Id);
+            var anotherBatch = _sut.PullGroupAsync(null, true);
+            Assert.True(pull.IsCompletedSuccessfully);
+            Assert.True(clone.IsCompletedSuccessfully);
+            Assert.True(anotherBatch.IsCompletedSuccessfully);
+            Assert.Equal("TRANSFER_BUSY", pull.Result.Error!.Code);
+            Assert.Equal("TRANSFER_BUSY", clone.Result.Error!.Code);
+            Assert.Equal("TRANSFER_BUSY", anotherBatch.Result.Error!.Code);
+            Assert.Equal(1, _transfer.PullCount);
+            Assert.Equal(0, _transfer.CloneCount);
+        }
+        finally { release.TrySetResult(Result.Success()); }
+
+        Assert.True((await batch).IsSuccess);
+        Assert.True((await _sut.PullAsync(project.Id)).IsSuccess);
+    }
+
     public void Dispose() => Directory.Delete(_root, true);
 
     [Fact]
@@ -119,8 +244,8 @@ public sealed class ProjectTransferServiceTests : IDisposable
         var group = new GitBinder.Domain.Projects.ProjectGroup(Guid.NewGuid(), "Work");
         _groups.Groups.Add(group.Id, group);
         await _accounts.AddAsync(new Account { IsDefault = true });
-        var first = new GitBinder.Domain.Projects.Project { Name = "one", RepositoryPath = "one" };
-        var second = new GitBinder.Domain.Projects.Project { Name = "two", RepositoryPath = "two" };
+        var first = new GitBinder.Domain.Projects.Project { Name = "one", RepositoryPath = "one", GitDir = "one/.git" };
+        var second = new GitBinder.Domain.Projects.Project { Name = "two", RepositoryPath = "two", GitDir = "two/.git" };
         await _projects.AddAsync(first);
         await _projects.AddAsync(second);
         await _projects.AddAsync(new GitBinder.Domain.Projects.Project { Name = "outside" });
@@ -142,8 +267,8 @@ public sealed class ProjectTransferServiceTests : IDisposable
     public async Task GroupPull_CancelStopsRemaining_AndHoldsTransferLock()
     {
         await _accounts.AddAsync(new Account { IsDefault = true });
-        await _projects.AddAsync(new GitBinder.Domain.Projects.Project { Name = "one" });
-        await _projects.AddAsync(new GitBinder.Domain.Projects.Project { Name = "two" });
+        await _projects.AddAsync(new GitBinder.Domain.Projects.Project { Name = "one", GitDir = "one/.git" });
+        await _projects.AddAsync(new GitBinder.Domain.Projects.Project { Name = "two", GitDir = "two/.git" });
         using var cancellation = new CancellationTokenSource();
         _transfer.OnPull = async (_, _, _) =>
         {
@@ -179,8 +304,8 @@ public sealed class ProjectTransferServiceTests : IDisposable
         var secondAccount = new Account();
         await _accounts.AddAsync(firstAccount);
         await _accounts.AddAsync(secondAccount);
-        var first = new GitBinder.Domain.Projects.Project { RepositoryPath = "one" };
-        var second = new GitBinder.Domain.Projects.Project { RepositoryPath = "two" };
+        var first = new GitBinder.Domain.Projects.Project { RepositoryPath = "one", GitDir = "one/.git" };
+        var second = new GitBinder.Domain.Projects.Project { RepositoryPath = "two", GitDir = "two/.git" };
         await _projects.AddAsync(first);
         await _projects.AddAsync(second);
         await _bindings.AddAsync(new GitBinder.Domain.Bindings.Binding { ProjectId = first.Id, AccountId = firstAccount.Id });

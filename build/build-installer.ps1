@@ -1,10 +1,10 @@
 ﻿# ============================================================================
 # GitBinder 一键打包脚本
-# 用法：.\build\build-installer.ps1 [-Version 1.2.0] [-Runtime win-x64]
+# 用法：.\build\build-installer.ps1 [-Version 1.2.5] [-Runtime win-x64]
 # 步骤：发布 → 编译 Inno Setup 安装包 → 输出到 dist\
 # ============================================================================
 param(
-    [string]$Version = "1.2.0",
+    [string]$Version = "1.2.5",
     [string]$Runtime = "win-x64"
 )
 

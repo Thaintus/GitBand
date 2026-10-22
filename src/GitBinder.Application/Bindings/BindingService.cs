@@ -1,4 +1,5 @@
 using GitBinder.Application.Accounts;
+using GitBinder.Application.Common;
 using GitBinder.Application.Git;
 using GitBinder.Application.GlobalMode;
 using GitBinder.Application.Projects;
@@ -71,49 +72,137 @@ public sealed partial class BindingService : IGlobalModeApplier
             return Result<Binding>.Failure(new DomainError("PROJECT_NOT_FOUND", projectId.ToString()));
         }
 
-        // 仓库存在时应用配置，缺失时仅记录绑定。
+        // 普通目录只能登记；待元数据刷新确认已初始化 Git 后，才允许用户显式绑定
+        if (project.IsLocalDirectory)
+            return Result<Binding>.Failure(new DomainError("PROJECT_GIT_NOT_INITIALIZED"));
+
+        // 先保留旧绑定的独立副本，避免保存失败时提前修改仓储缓存中的对象
+        var storedBinding = await _repository.GetByProjectIdAsync(projectId, ct);
+        var existing = storedBinding is null ? null : CopyBinding(storedBinding);
+        var appliedAt = DateTimeOffset.UtcNow;
+        if (existing is not null && appliedAt <= existing.AppliedAt)
+            appliedAt = existing.AppliedAt.AddTicks(1);
+        var binding = new Binding
+        {
+            Id = existing?.Id ?? Guid.NewGuid(),
+            ProjectId = projectId,
+            AccountId = accountId,
+            Status = BindingStatus.Active,
+            AppliedAt = appliedAt,
+            VerifiedAt = existing?.VerifiedAt,
+            LastTestResult = existing?.LastTestResult ?? string.Empty,
+        };
+
+        // 仓库存在时应用配置，缺失时仅记录绑定
         var repoExists = !string.IsNullOrWhiteSpace(project.RepositoryPath)
             && Directory.Exists(project.RepositoryPath);
+        GitLocalConfigSnapshot? previousConfig = null;
+        var configMayHaveChanged = false;
 
         if (repoExists)
         {
             try
             {
+                previousConfig = await _gitConfigApplier.CaptureLocalConfigAsync(project.RepositoryPath, ct);
                 await EnsureSnapshotAsync(project, ct);
-                // 常规模式下应立即应用用户刚选择的新账号。全局模式才优先使用全局账号，
-                // 避免改绑后仓库仍保留旧绑定账号的本地 Git 身份。
+                // 常规模式立即应用新账号，全局模式仍优先使用全局账号
                 var effectiveAccount = _effectiveAccountResolver is not null
                     && _effectiveAccountResolver.ResolveReason(project) is EffectiveReason.GlobalMode
                     ? _effectiveAccountResolver.Resolve(project) ?? account
                     : account;
+                ct.ThrowIfCancellationRequested();
+                configMayHaveChanged = true;
                 await ApplyAccountToRepositoryAsync(project, effectiveAccount, ct);
             }
-            catch (Exception) when (!ct.IsCancellationRequested)
+            catch (CommandTerminationUnconfirmedException)
             {
-                // Git 配置未真正写入时不能仅更新绑定记录，否则界面会显示新账号但仓库仍使用旧身份。
-                return Result<Binding>.Failure(new DomainError("BINDING_APPLY_FAILED", project.RepositoryPath));
+                // 旧进程可能仍在写配置，不能启动补偿与它并发修改同一仓库
+                return BindingFailure("TRANSFER_TERMINATION_UNCONFIRMED", project);
+            }
+            catch (Exception)
+            {
+                var restoreError = configMayHaveChanged
+                    ? await TryRestoreBindingConfigAsync(project, previousConfig!)
+                    : null;
+                return BindingFailure(restoreError ?? "BINDING_APPLY_FAILED", project);
             }
         }
 
-        var existing = await _repository.GetByProjectIdAsync(projectId, ct);
-        if (existing is not null)
+        try
         {
-            existing.AccountId = accountId;
-            existing.Status = BindingStatus.Active;
-            existing.AppliedAt = DateTimeOffset.UtcNow;
-            await _repository.UpdateAsync(existing, ct);
-            return Result<Binding>.Success(existing);
+            ct.ThrowIfCancellationRequested();
+            if (existing is null)
+                await _repository.AddAsync(binding, ct);
+            else
+                await _repository.UpdateAsync(binding, ct);
+            return Result<Binding>.Success(binding);
         }
-
-        var binding = new Binding
+        catch (Exception)
         {
-            ProjectId = projectId,
-            AccountId = accountId,
-            Status = BindingStatus.Active,
-        };
+            Binding? persisted;
+            try
+            {
+                // 写入可能已提交后才抛错或取消，先回查结果再决定是否补偿
+                persisted = await _repository.GetByProjectIdAsync(projectId, CancellationToken.None);
+            }
+            catch (Exception)
+            {
+                // 提交状态无法确认时不盲目反写配置，提示用户核对实际状态
+                return BindingFailure("BINDING_ROLLBACK_FAILED", project);
+            }
 
-        await _repository.AddAsync(binding, ct);
-        return Result<Binding>.Success(binding);
+            if (SameBinding(persisted, binding))
+                return Result<Binding>.Success(persisted!);
+
+            // 其他写入改变了绑定时，也不能把仓库强行恢复到更早的配置
+            if (!SameBinding(persisted, existing))
+                return BindingFailure("BINDING_ROLLBACK_FAILED", project);
+
+            var restoreError = configMayHaveChanged
+                ? await TryRestoreBindingConfigAsync(project, previousConfig!)
+                : null;
+            return BindingFailure(restoreError ?? "BINDING_SAVE_FAILED", project);
+        }
+    }
+
+    private static Binding CopyBinding(Binding binding) => new()
+    {
+        Id = binding.Id,
+        ProjectId = binding.ProjectId,
+        AccountId = binding.AccountId,
+        Status = binding.Status,
+        AppliedAt = binding.AppliedAt,
+        VerifiedAt = binding.VerifiedAt,
+        LastTestResult = binding.LastTestResult,
+    };
+
+    private static bool SameBinding(Binding? first, Binding? second)
+        => first is null || second is null
+            ? first is null && second is null
+            : first.Id == second.Id && first.ProjectId == second.ProjectId
+                && first.AccountId == second.AccountId && first.Status == second.Status
+                && first.AppliedAt == second.AppliedAt && first.VerifiedAt == second.VerifiedAt
+                && first.LastTestResult == second.LastTestResult;
+
+    private static Result<Binding> BindingFailure(string code, Project project)
+        => Result<Binding>.Failure(new DomainError(code, project.RepositoryPath));
+
+    private async Task<string?> TryRestoreBindingConfigAsync(Project project, GitLocalConfigSnapshot snapshot)
+    {
+        try
+        {
+            // 补偿使用本次操作前配置，且不受调用方取消影响，不替换最早的解绑快照
+            await _gitConfigApplier.RestoreLocalConfigAsync(project.RepositoryPath, snapshot, CancellationToken.None);
+            return null;
+        }
+        catch (CommandTerminationUnconfirmedException)
+        {
+            return "TRANSFER_TERMINATION_UNCONFIRMED";
+        }
+        catch (Exception)
+        {
+            return "BINDING_ROLLBACK_FAILED";
+        }
     }
 
     /// <summary>解除绑定：恢复仓库原始配置，删除绑定与快照。</summary>
@@ -123,7 +212,7 @@ public sealed partial class BindingService : IGlobalModeApplier
         if (project is not null)
         {
             var snapshot = await _snapshotRepository.GetByProjectIdAsync(projectId, ct);
-            if (snapshot is not null && !string.IsNullOrWhiteSpace(project.RepositoryPath)
+            if (snapshot is not null && !project.IsLocalDirectory && !string.IsNullOrWhiteSpace(project.RepositoryPath)
                 && Directory.Exists(project.RepositoryPath))
             {
                 await _gitConfigApplier.RestoreAsync(
@@ -152,7 +241,7 @@ public sealed partial class BindingService : IGlobalModeApplier
         }
 
         var project = await _projectRepository.GetByIdAsync(binding.ProjectId, ct);
-        if (project is null || !System.IO.Directory.Exists(project.RepositoryPath))
+        if (project is null || project.IsLocalDirectory || !System.IO.Directory.Exists(project.RepositoryPath))
         {
             return BindingStatus.RepositoryMissing;
         }
@@ -195,6 +284,9 @@ public sealed partial class BindingService : IGlobalModeApplier
         {
             return new TestRemoteResult { Error = new DomainError("BINDING_INCOMPLETE") };
         }
+
+        if (project.IsLocalDirectory)
+            return new TestRemoteResult { Error = new DomainError("PROJECT_GIT_NOT_INITIALIZED") };
 
         var effectiveAccount = _effectiveAccountResolver is null ? account : _effectiveAccountResolver.Resolve(project);
         if (effectiveAccount is null || !effectiveAccount.Enabled)
@@ -239,7 +331,7 @@ public sealed partial class BindingService : IGlobalModeApplier
         {
             ct.ThrowIfCancellationRequested();
             var project = await _projectRepository.GetByIdAsync(binding.ProjectId, ct);
-            if (project is null)
+            if (project is null || project.IsLocalDirectory)
                 continue;
 
             var account = _effectiveAccountResolver is null
@@ -336,7 +428,7 @@ public sealed partial class BindingService : IGlobalModeApplier
         foreach (var binding in bindings)
         {
             var project = await _projectRepository.GetByIdAsync(binding.ProjectId, ct);
-            if (project is null || string.IsNullOrWhiteSpace(project.RepositoryPath)
+            if (project is null || project.IsLocalDirectory || string.IsNullOrWhiteSpace(project.RepositoryPath)
                 || !Directory.Exists(project.RepositoryPath))
             {
                 continue;

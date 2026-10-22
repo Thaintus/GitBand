@@ -346,6 +346,7 @@ public class BindingProtocolSwitchTests
         public int SetCount { get; private set; }
         public int FailSetCall { get; set; }
         public Action<int>? AfterSet { get; set; }
+        public Task<Result> InitializeRepositoryAsync(string path, CancellationToken ct = default) => Inner.InitializeRepositoryAsync(path, ct);
         public Task<bool> ValidateRepositoryAsync(string path, CancellationToken ct = default) => Inner.ValidateRepositoryAsync(path, ct);
         public Task<string?> GetRepositoryRootAsync(string path, CancellationToken ct = default) => Inner.GetRepositoryRootAsync(path, ct);
         public Task<string?> GetGitDirAsync(string path, CancellationToken ct = default) => Inner.GetGitDirAsync(path, ct);

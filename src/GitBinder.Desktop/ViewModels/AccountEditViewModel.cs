@@ -21,6 +21,8 @@ public partial class AccountEditViewModel : ViewModelBase
     private readonly ILocalizationService _localization;
     private readonly FilePickerDelegate _filePicker;
     private readonly AccountIdentitySyncService? _identitySyncService;
+    private readonly ProjectsViewModel? _projects;
+    private readonly AccountsViewModel? _accountList;
 
     private Guid? _editingId;
     private bool _hasStoredHttpsCredential;
@@ -73,6 +75,7 @@ public partial class AccountEditViewModel : ViewModelBase
 
     /// <summary>本次编辑中已有账号数据持久化，关闭后列表仍应刷新。</summary>
     public bool HasPersistedChanges { get; private set; }
+    internal bool HasRefreshedAccountList { get; private set; }
 
     /// <summary>请求关闭窗口（保存成功时触发）。</summary>
     public event Action? CloseRequested;
@@ -82,13 +85,17 @@ public partial class AccountEditViewModel : ViewModelBase
         PlatformService platformService,
         ILocalizationService localization,
         FilePickerDelegate filePicker,
-        AccountIdentitySyncService? identitySyncService = null)
+        AccountIdentitySyncService? identitySyncService = null,
+        ProjectsViewModel? projects = null,
+        AccountsViewModel? accountList = null)
     {
         _accountService = accountService;
         _platformService = platformService;
         _localization = localization;
         _filePicker = filePicker;
         _identitySyncService = identitySyncService;
+        _projects = projects;
+        _accountList = accountList;
     }
 
     /// <summary>加载平台目录（每次打开窗口时调用，仅启用的平台）。</summary>
@@ -107,6 +114,7 @@ public partial class AccountEditViewModel : ViewModelBase
     {
         _editingId = null;
         HasPersistedChanges = false;
+        HasRefreshedAccountList = false;
         _hasStoredHttpsCredential = false;
         WindowTitle = _localization.GetString("Accounts.Edit.New");
         GitName = string.Empty;
@@ -126,6 +134,7 @@ public partial class AccountEditViewModel : ViewModelBase
     {
         _editingId = account.Id;
         HasPersistedChanges = false;
+        HasRefreshedAccountList = false;
         // 只保留凭据引用状态，不解密或回填密码；兼容旧版误降级的认证类型。
         _hasStoredHttpsCredential = !string.IsNullOrWhiteSpace(account.HttpsSecretId);
         WindowTitle = _localization.GetString("Accounts.Edit.Title");
@@ -187,12 +196,53 @@ public partial class AccountEditViewModel : ViewModelBase
     private async Task SaveAsync()
     {
         Saved = false;
+        HasRefreshedAccountList = false;
+        if (_projects is not null && !_projects.TryBeginExternalOperation())
+        {
+            Error = _localization.GetString("Accounts.OperationBusy");
+            return;
+        }
+
+        var shouldClose = false;
+        try
+        {
+            shouldClose = await SaveAndSynchronizeAsync();
+            if (HasPersistedChanges)
+            {
+                var refreshFailed = false;
+                if (_accountList is not null)
+                {
+                    try { await _accountList.LoadAsync(); HasRefreshedAccountList = true; }
+                    catch (Exception) { refreshFailed = true; }
+                }
+                if (_projects is not null)
+                {
+                    try { await _projects.ReloadAfterExternalOperationAsync(); }
+                    catch (Exception) { refreshFailed = true; }
+                }
+                if (refreshFailed)
+                {
+                    var refreshError = _localization.GetString("Accounts.RefreshFailed");
+                    Error = string.IsNullOrWhiteSpace(Error) ? refreshError : Error + " " + refreshError;
+                    shouldClose = false;
+                }
+            }
+        }
+        finally { _projects?.EndExternalOperation(); }
+
+        if (!shouldClose) return;
+        Saved = true;
+        CloseRequested?.Invoke();
+    }
+
+    private async Task<bool> SaveAndSynchronizeAsync()
+    {
         var synchronizeIdentity = _editingId.HasValue;
         try
         {
             if (!await SaveAccountAsync())
             {
-                return;
+                return false;
             }
         }
         catch (Exception)
@@ -200,7 +250,7 @@ public partial class AccountEditViewModel : ViewModelBase
             // 存储/加密失败时保留表单供重试，不让异步命令异常终止应用。
             // 不展示异常原文，避免暴露凭据、私钥路径等敏感信息。
             Error = _localization.GetString("Accounts.Edit.SaveFailed");
-            return;
+            return false;
         }
 
         // 到此账号已持久化。同步失败必须保留这个事实，不能提示账号保存失败。
@@ -212,19 +262,18 @@ public partial class AccountEditViewModel : ViewModelBase
                 if (!result.IsSuccess)
                 {
                     Error = _localization.GetString("Accounts.Edit.IdentitySyncFailed");
-                    return;
+                    return false;
                 }
             }
             catch (Exception)
             {
                 // 同步期间的非预期异常也不能逃逸或暴露配置/凭据细节。
                 Error = _localization.GetString("Accounts.Edit.IdentitySyncFailed");
-                return;
+                return false;
             }
         }
 
-        Saved = true;
-        CloseRequested?.Invoke();
+        return true;
     }
 
     private async Task<bool> SaveAccountAsync()

@@ -123,6 +123,59 @@ public class AccountServiceTests
     }
 
     [Fact]
+    public async Task Delete_ActiveGlobalAccountWithoutBindings_PreservesAccountAndSecrets()
+    {
+        var accounts = new FakeAccountRepository();
+        var bindings = new FakeBindingRepository();
+        var secrets = new FakeSecretStore();
+        var state = new FakeGlobalModeState { IsEnabled = true };
+        var service = new AccountService(accounts, new Guard(bindings), new SecretService(secrets),
+            new FakePrivateKeyImporter(), state);
+        await service.CreateAsync(new CreateAccountInput { Username = "default" });
+        var global = (await service.CreateAsync(new CreateAccountInput
+        {
+            Username = "global", HttpsCredential = "fictional-global-secret", SshPassphrase = "fictional-passphrase",
+        })).Value!;
+        state.GlobalAccountId = global.Id;
+
+        var result = await service.DeleteAsync(global.Id);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("ACCOUNT_GLOBAL_DELETE_FORBIDDEN", result.Error!.Code);
+        Assert.Same(global, await accounts.GetByIdAsync(global.Id));
+        Assert.Equal("fictional-global-secret", await secrets.GetAsync(global.HttpsSecretId));
+        Assert.Equal("fictional-passphrase", await secrets.GetAsync(global.PassphraseSecretId));
+        Assert.Empty(await bindings.GetAllAsync());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Delete_PreviousGlobalAccount_AfterDisableOrSwitch_IsAllowed(bool switchAccount)
+    {
+        var accounts = new FakeAccountRepository();
+        var bindings = new FakeBindingRepository();
+        var secrets = new FakeSecretStore();
+        var state = new FakeGlobalModeState();
+        var service = new AccountService(accounts, new Guard(bindings), new SecretService(secrets),
+            new FakePrivateKeyImporter(), state);
+        var first = (await service.CreateAsync(new CreateAccountInput { Username = "default" })).Value!;
+        var previous = (await service.CreateAsync(new CreateAccountInput
+        {
+            Username = "previous global", HttpsCredential = "fictional-previous-secret",
+        })).Value!;
+        state.IsEnabled = switchAccount;
+        state.GlobalAccountId = switchAccount ? first.Id : previous.Id;
+
+        var result = await service.DeleteAsync(previous.Id);
+
+        Assert.True(result.IsSuccess);
+        Assert.Null(await accounts.GetByIdAsync(previous.Id));
+        Assert.Null(await secrets.GetAsync(previous.HttpsSecretId));
+        Assert.NotNull(await accounts.GetByIdAsync(first.Id));
+    }
+
+    [Fact]
     public void Create_WithHttpsCredential_SavesSecretAndStoresRefOnly()
     {
         var (service, accountRepo, _, secretStore) = CreateSut();

@@ -61,14 +61,12 @@ public sealed class ProjectAuthenticationViewModelTests
         Assert.Equal(0, f.Transfer.PullCount);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Operation_CancelProtocolChangeDoesNotTestOrPull(bool pull)
+    [Fact]
+    public async Task Test_CancelProtocolChangeDoesNotConnect()
     {
         using var f = await Fixture.CreateAsync(boundToSsh: true);
 
-        await f.RunOperationAsync(pull);
+        await f.RunOperationAsync(pull: false);
 
         Assert.Equal(1, f.ConfirmationCount);
         Assert.Equal(HttpsUrl, f.Git.OriginUrl);
@@ -80,10 +78,8 @@ public sealed class ProjectAuthenticationViewModelTests
         Assert.Empty(f.ViewModel.OperationProgress);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Operation_ConfirmationUpdatesOriginAndCardBeforeTestOrPull(bool pull)
+    [Fact]
+    public async Task Test_ConfirmationUpdatesOriginAndCardBeforeConnecting()
     {
         using var f = await Fixture.CreateAsync(boundToSsh: true);
         f.Confirm = () => Task.FromResult(true);
@@ -98,16 +94,16 @@ public sealed class ProjectAuthenticationViewModelTests
         f.Transfer.OnTest = OnConnection;
         f.Transfer.OnPull = OnConnection;
 
-        await f.RunOperationAsync(pull);
+        await f.RunOperationAsync(pull: false);
 
         Assert.Equal(1, f.ConfirmationCount);
         Assert.Equal(SshUrl, originAtConnection);
         Assert.Equal("SSH", protocolAtConnection);
         Assert.Equal(f.SshAccount.Id, f.Transfer.UsedAccountId);
-        Assert.Equal(pull ? 0 : 1, f.Transfer.TestCount);
-        Assert.Equal(pull ? 1 : 0, f.Transfer.PullCount);
+        Assert.Equal(1, f.Transfer.TestCount);
+        Assert.Equal(0, f.Transfer.PullCount);
         Assert.True(f.ViewModel.CanManageProjects);
-        Assert.Contains(pull ? "Projects.PullSuccess" : "Test.Success", f.ViewModel.Feedback);
+        Assert.Contains("Test.Success", f.ViewModel.Feedback);
     }
 
     [Fact]
@@ -150,10 +146,8 @@ public sealed class ProjectAuthenticationViewModelTests
         Assert.Equal(0, f.Config.ApplyIdentityCount);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Operation_OriginChangesDuringConfirmationRejectsStalePreviewWithoutConnection(bool pull)
+    [Fact]
+    public async Task Test_OriginChangesDuringConfirmationRejectsStalePreviewWithoutConnection()
     {
         using var f = await Fixture.CreateAsync(boundToSsh: true);
         const string externallyChangedUrl = "https://gitee.com/team/another.git";
@@ -163,7 +157,7 @@ public sealed class ProjectAuthenticationViewModelTests
             return Task.FromResult(true);
         };
 
-        await f.RunOperationAsync(pull);
+        await f.RunOperationAsync(pull: false);
 
         Assert.Equal(1, f.ConfirmationCount);
         Assert.Equal(externallyChangedUrl, f.Git.OriginUrl);
@@ -173,6 +167,61 @@ public sealed class ProjectAuthenticationViewModelTests
         Assert.Equal(0, f.Transfer.PullCount);
         Assert.Equal(0, f.Config.ApplyIdentityCount);
         Assert.True(f.ViewModel.CanManageProjects);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Pull_LeavesOriginUnchangedAndUsesEffectiveAccountWithoutProtocolConfirmation(bool globalMode)
+    {
+        using var f = await Fixture.CreateAsync(boundToSsh: !globalMode);
+        f.Global.IsEnabled = globalMode;
+        f.Global.GlobalAccountId = globalMode ? f.SshAccount.Id : null;
+        f.Confirm = () => throw new InvalidOperationException("Pull must not convert origin before resolving its tracking remote");
+        f.Transfer.OnPull = (_, _, _) => Task.FromResult(Result.Failure(new DomainError("TRANSFER_HTTPS_REQUIRED")));
+
+        await f.RunOperationAsync(pull: true);
+
+        Assert.Equal(0, f.ConfirmationCount);
+        Assert.Equal(HttpsUrl, f.Git.OriginUrl);
+        Assert.Null(f.Git.LastSetOriginUrl);
+        Assert.Equal(1, f.Transfer.PullCount);
+        Assert.Equal(0, f.Transfer.TestCount);
+        Assert.Equal(f.SshAccount.Id, f.Transfer.UsedAccountId);
+        Assert.Equal(0, f.Config.ApplyIdentityCount);
+        Assert.Contains("TRANSFER_HTTPS_REQUIRED", f.ViewModel.Feedback);
+        Assert.False(f.ViewModel.HasPendingOperations);
+    }
+
+    [Fact]
+    public async Task SwitchAccount_RepeatedSelectionRestoresAcceptedChoiceUntilBindingFinishes()
+    {
+        using var f = await Fixture.CreateAsync();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        f.Confirm = () => { entered.TrySetResult(); return release.Task; };
+        var item = Assert.Single(f.ViewModel.Items);
+        var task = f.ViewModel.SwitchBindingAccountAsync(item, f.SshAccount);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            item.SelectedBindingAccount = f.HttpsAccount;
+            await f.ViewModel.SwitchBindingAccountAsync(item, f.HttpsAccount);
+            Assert.Equal(f.SshAccount.Id, item.SelectedBindingAccount!.Id);
+            Assert.True(item.IsBusy);
+            Assert.True(item.IsSwitchingBinding);
+            Assert.Equal(1, f.ConfirmationCount);
+            release.TrySetResult(false);
+            await task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(f.SshAccount.Id, item.BoundAccount!.Id);
+            Assert.Equal(f.SshAccount.Id, item.SelectedBindingAccount!.Id);
+            Assert.False(item.IsBusy);
+        }
+        finally
+        {
+            release.TrySetResult(false);
+            await task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
     private sealed class Fixture : IDisposable

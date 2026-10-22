@@ -43,6 +43,7 @@ public sealed class GitEmailConfigApplierTests
             var call = Assert.Single(calls, call => call.Arguments[3] == key);
             Assert.Equal(new[] { "config", scope, "--replace-all", key, expected }, call.Arguments);
             Assert.Equal(global ? null : RepositoryPath, call.WorkingDirectory);
+            AssertProcessScope(call, global);
             Assert.Equal(expected, executor.Values[(scope, key)]);
             if (!global)
             {
@@ -91,6 +92,7 @@ public sealed class GitEmailConfigApplierTests
             Assert.Equal(scope, call.Arguments[1]);
             Assert.Equal("--get", call.Arguments[2]);
             Assert.Equal(global ? null : RepositoryPath, call.WorkingDirectory);
+            AssertProcessScope(call, global);
         });
     }
 
@@ -146,6 +148,7 @@ public sealed class GitEmailConfigApplierTests
                 ? new[] { "config", Scope(global), "--unset-all", key }
                 : new[] { "config", Scope(global), "--replace-all", key, value };
             Assert.Equal(args, call.Arguments);
+            AssertProcessScope(call, global);
             Assert.Equal(value is not null, executor.Values.ContainsKey((Scope(global), key)));
             if (value is not null)
             {
@@ -264,6 +267,57 @@ public sealed class GitEmailConfigApplierTests
         Assert.Equal("author.email", executor.Calls[^1].Arguments[3]);
     }
 
+    [Fact]
+    public async Task LocalIdentityAndAuthentication_UseIsolatedRepositoryForCaptureApplyAndRestore()
+    {
+        var executor = new RecordingExecutor();
+        executor.Values[("--local", "user.name")] = "Original";
+        executor.Values[("--local", "user.email")] = "original@example.com";
+        executor.Values[("--local", "core.sshCommand")] = "original-ssh";
+        executor.Values[("--local", "credential.helper")] = "original-helper";
+        var applier = new GitConfigApplier(executor);
+
+        var identity = await applier.ReadIdentityAsync(RepositoryPath);
+        var emailConfig = await applier.ReadEmailConfigAsync(RepositoryPath);
+        var sshCommand = await applier.ReadSshCommandAsync(RepositoryPath);
+        var credentialHelper = await applier.ReadCredentialHelperAsync(RepositoryPath);
+        await applier.ApplyIdentityAsync(RepositoryPath, "Selected", "selected@example.com");
+        await applier.ApplySshCommandAsync(RepositoryPath, "selected-ssh");
+        await applier.ApplyCredentialHelperAsync(RepositoryPath, null);
+        await applier.RestoreAsync(RepositoryPath, identity.Name, identity.Email, sshCommand,
+            credentialHelper, emailConfig: emailConfig);
+
+        Assert.Equal(("Original", "original@example.com"), identity);
+        Assert.Equal("Original", executor.Values[("--local", "user.name")]);
+        Assert.Equal("original@example.com", executor.Values[("--local", "user.email")]);
+        Assert.Equal("original-ssh", executor.Values[("--local", "core.sshCommand")]);
+        Assert.Equal("original-helper", executor.Values[("--local", "credential.helper")]);
+        Assert.All(executor.Calls, call => AssertProcessScope(call, global: false));
+    }
+
+    private static void AssertProcessScope(Invocation call, bool global)
+    {
+        if (global)
+        {
+            Assert.Null(call.Options);
+            return;
+        }
+
+        Assert.Equal(RepositoryPath, call.WorkingDirectory);
+        Assert.NotNull(call.Options);
+        Assert.Equal(TimeSpan.FromSeconds(60), call.Options.Timeout);
+        foreach (var variable in new[] { "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG" })
+        {
+            Assert.True(call.Options.Environment.TryGetValue(variable, out var value), variable);
+            Assert.Null(value);
+        }
+        Assert.Equal("0", call.Options.Environment["GIT_CONFIG_COUNT"]);
+        Assert.Equal(string.Empty, call.Options.Environment["GIT_CONFIG_PARAMETERS"]);
+        Assert.False(call.Options.Environment.ContainsKey("GIT_CONFIG_GLOBAL"));
+        Assert.False(call.Options.Environment.ContainsKey("GIT_CONFIG_NOSYSTEM"));
+    }
+
     private static RecordingExecutor FailingWriteExecutor(string key, int exitCode = 128) => new()
     {
         Failure = call => call.Arguments[3] == key
@@ -314,7 +368,7 @@ public sealed class GitEmailConfigApplierTests
         }
     }
 
-    private sealed record Invocation(string[] Arguments, string? WorkingDirectory);
+    private sealed record Invocation(string[] Arguments, string? WorkingDirectory, CommandExecutionOptions? Options);
 
     private sealed class RecordingExecutor : ICommandExecutor
     {
@@ -324,8 +378,16 @@ public sealed class GitEmailConfigApplierTests
 
         public Task<CommandResult> ExecuteAsync(string executable, IReadOnlyList<string> arguments,
             string? workingDirectory = null, CancellationToken cancellationToken = default)
+            => ExecuteCore(arguments, workingDirectory, null);
+
+        public Task<CommandResult> ExecuteWithOptionsAsync(string executable, IReadOnlyList<string> arguments,
+            string? workingDirectory, CommandExecutionOptions options, CancellationToken cancellationToken = default)
+            => ExecuteCore(arguments, workingDirectory, options);
+
+        private Task<CommandResult> ExecuteCore(IReadOnlyList<string> arguments,
+            string? workingDirectory, CommandExecutionOptions? options)
         {
-            var call = new Invocation(arguments.ToArray(), workingDirectory);
+            var call = new Invocation(arguments.ToArray(), workingDirectory, options);
             Calls.Add(call);
             var failure = Failure?.Invoke(call);
             if (failure is not null)

@@ -20,6 +20,10 @@ public partial class AccountsViewModel : ViewModelBase
     private readonly AccountService _accountService;
     private readonly ILocalizationService _localization;
     private readonly IServiceProvider _services;
+    private readonly ProjectsViewModel? _projects;
+    private readonly SemaphoreSlim _loadGate = new(1, 1);
+
+    public event Func<Task>? DataRefreshed;
 
     public ObservableCollection<AccountItemViewModel> Items { get; } = [];
 
@@ -53,25 +57,32 @@ public partial class AccountsViewModel : ViewModelBase
         IAccountRepository repository,
         AccountService accountService,
         ILocalizationService localization,
-        IServiceProvider services)
+        IServiceProvider services,
+        ProjectsViewModel? projects = null)
     {
         _repository = repository;
         _accountService = accountService;
         _localization = localization;
         _services = services;
+        _projects = projects;
     }
 
     public async Task LoadAsync()
     {
-        var accounts = await _repository.GetAllAsync();
-        Items.Clear();
-        foreach (var account in accounts)
+        await _loadGate.WaitAsync();
+        try
         {
-            Items.Add(new AccountItemViewModel(account, _localization));
+            var accounts = await _repository.GetAllAsync();
+            Items.Clear();
+            foreach (var account in accounts)
+                Items.Add(new AccountItemViewModel(account, _localization));
+            HasItems = Items.Count > 0;
+            ApplyFilter();
         }
+        finally { _loadGate.Release(); }
 
-        HasItems = Items.Count > 0;
-        ApplyFilter();
+        if (DataRefreshed is { } refreshed)
+            foreach (Func<Task> handler in refreshed.GetInvocationList()) await handler();
     }
 
     partial void OnSearchTextChanged(string value) => ApplyFilter();
@@ -133,7 +144,7 @@ public partial class AccountsViewModel : ViewModelBase
             var result = owner is null
                 ? await window.ShowDialog<bool?>(window)
                 : await window.ShowDialog<bool?>(owner);
-            if (result is true || editor.HasPersistedChanges)
+            if ((result is true || editor.HasPersistedChanges) && !editor.HasRefreshedAccountList)
             {
                 await LoadAsync();
             }
@@ -160,48 +171,66 @@ public partial class AccountsViewModel : ViewModelBase
     [RelayCommand]
     private async Task SetDefaultAsync(AccountItemViewModel? item)
     {
-        if (item is null)
+        if (item is null || !TryBeginAccountOperation()) return;
+        try
         {
-            return;
+            Feedback = string.Empty;
+            var result = await _accountService.SetDefaultAsync(item.Account.Id);
+            if (!result.IsSuccess) Feedback = _localization.GetString(result.Error!.Code);
         }
-
-        var result = await _accountService.SetDefaultAsync(item.Account.Id);
-        if (result.IsSuccess)
-        {
-            await LoadAsync();
-        }
-        else
-        {
-            Feedback = _localization.GetString(result.Error!.Code);
-        }
+        catch (Exception) { Feedback = _localization.GetString("Accounts.OperationFailed"); }
+        finally { await CompleteAccountOperationAsync(refresh: true); }
     }
 
     [RelayCommand]
     private async Task DeleteAsync(AccountItemViewModel? item)
     {
-        if (item is null)
+        if (item is null || !TryBeginAccountOperation()) return;
+        var refresh = false;
+        try
         {
-            return;
+            Feedback = string.Empty;
+            var confirmed = await DialogHelper.ConfirmAsync(
+                _localization.GetString("Common.Confirm"),
+                _localization.GetString("Accounts.Delete.Confirm", item.DisplayAlias),
+                _localization.GetString("Common.Delete"));
+            if (!confirmed) return;
+            refresh = true;
+            var result = await _accountService.DeleteAsync(item.Account.Id);
+            if (!result.IsSuccess)
+                Feedback = _localization.GetString(result.Error!.Code, result.Error.Arguments);
         }
+        catch (Exception) { Feedback = _localization.GetString("Accounts.OperationFailed"); }
+        finally { await CompleteAccountOperationAsync(refresh); }
+    }
 
-        var confirmed = await DialogHelper.ConfirmAsync(
-            _localization.GetString("Common.Confirm"),
-            _localization.GetString("Accounts.Delete.Confirm", item.DisplayAlias),
-            _localization.GetString("Common.Delete"));
-        if (!confirmed)
-        {
-            return;
-        }
+    private bool TryBeginAccountOperation()
+    {
+        if (_projects is null || _projects.TryBeginExternalOperation()) return true;
+        Feedback = _localization.GetString("Accounts.OperationBusy");
+        return false;
+    }
 
-        var result = await _accountService.DeleteAsync(item.Account.Id);
-        if (result.IsSuccess)
+    private async Task CompleteAccountOperationAsync(bool refresh)
+    {
+        try
         {
-            await LoadAsync();
+            if (!refresh) return;
+            var refreshFailed = false;
+            try { await LoadAsync(); }
+            catch (Exception) { refreshFailed = true; }
+            if (_projects is not null)
+            {
+                try { await _projects.ReloadAfterExternalOperationAsync(); }
+                catch (Exception) { refreshFailed = true; }
+            }
+            if (refreshFailed)
+            {
+                var refreshError = _localization.GetString("Accounts.RefreshFailed");
+                Feedback = string.IsNullOrWhiteSpace(Feedback) ? refreshError : Feedback + " " + refreshError;
+            }
         }
-        else
-        {
-            Feedback = _localization.GetString(result.Error!.Code, result.Error.Arguments);
-        }
+        finally { _projects?.EndExternalOperation(); }
     }
 }
 

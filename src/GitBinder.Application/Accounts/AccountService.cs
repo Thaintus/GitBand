@@ -2,6 +2,7 @@ using GitBinder.Application.Common;
 using GitBinder.Application.Security;
 using GitBinder.Domain.Accounts;
 using GitBinder.Domain.Common;
+using GitBinder.Domain.Services;
 
 namespace GitBinder.Application.Accounts;
 
@@ -14,17 +15,20 @@ public sealed class AccountService
     private readonly IAccountDeletionGuard _deletionGuard;
     private readonly SecretService _secretService;
     private readonly IPrivateKeyImporter _privateKeyImporter;
+    private readonly IGlobalModeState? _globalModeState;
 
     public AccountService(
         IAccountRepository repository,
         IAccountDeletionGuard deletionGuard,
         SecretService secretService,
-        IPrivateKeyImporter privateKeyImporter)
+        IPrivateKeyImporter privateKeyImporter,
+        IGlobalModeState? globalModeState = null)
     {
         _repository = repository;
         _deletionGuard = deletionGuard;
         _secretService = secretService;
         _privateKeyImporter = privateKeyImporter;
+        _globalModeState = globalModeState;
     }
 
     /// <summary>导入 SSH 私钥：复制到应用 keys 目录并返回新路径，便于后续读取。</summary>
@@ -42,7 +46,7 @@ public sealed class AccountService
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return Result<string>.Failure(new DomainError("ACCOUNT_KEY_IMPORT_FAILED", ex.Message));
+            return Result<string>.Failure(new DomainError("ACCOUNT_KEY_IMPORT_FAILED", technicalDetails: ex.Message, arguments: []));
         }
     }
 
@@ -177,6 +181,9 @@ public sealed class AccountService
         {
             return Result.Failure(new DomainError("ACCOUNT_DEFAULT_DELETE_FORBIDDEN"));
         }
+
+        if (_globalModeState?.IsEnabled == true && _globalModeState.GlobalAccountId == id)
+            return Result.Failure(new DomainError("ACCOUNT_GLOBAL_DELETE_FORBIDDEN"));
 
         var boundCount = await _deletionGuard.CountBindingsAsync(id, ct);
         if (boundCount > 0)

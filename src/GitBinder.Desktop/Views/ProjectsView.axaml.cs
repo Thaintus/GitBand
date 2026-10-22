@@ -12,7 +12,7 @@ public partial class ProjectsView : UserControl
         InitializeComponent();
     }
 
-    /// <summary>Escape 只取消当前页内编辑，不保存，也不打断正在进行的写入或传输。</summary>
+    /// <summary>Escape 只取消当前行编辑，不保存，也不打断正在进行的写入或传输</summary>
     public bool TryCancelInlineEdit(Control? focusedControl)
     {
         if (DataContext is not ProjectsViewModel viewModel) return false;
@@ -26,7 +26,7 @@ public partial class ProjectsView : UserControl
             ? focusedItem
             : viewModel.FilteredItems.LastOrDefault(candidate => candidate.IsRemoteEditorOpen || candidate.IsPathEditorOpen);
         if (item is null) return false;
-        if (viewModel.HasPendingOperations || item.IsPathSaving) return true;
+        if (!item.CanManageProject) return true;
 
         if (item.IsPathEditorOpen && (editor?.Classes.Contains("project-path-editor") is true || !item.IsRemoteEditorOpen))
             viewModel.CancelEditPathCommand.Execute(item);
@@ -38,6 +38,7 @@ public partial class ProjectsView : UserControl
     private async void OnProjectGroupSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (sender is ComboBox { DataContext: ProjectItemViewModel item }
+            && !item.IsRestoringSelection
             && DataContext is ProjectsViewModel viewModel
             && e.AddedItems.OfType<ProjectGroupItemViewModel>().FirstOrDefault() is { } group)
             await viewModel.SwitchProjectGroupAsync(item, group);
@@ -46,9 +47,9 @@ public partial class ProjectsView : UserControl
     private async void OnBindingAccountSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (sender is not ComboBox { DataContext: ProjectItemViewModel item }
+            || item.IsRestoringSelection
             || DataContext is not ProjectsViewModel viewModel
-            || e.AddedItems.OfType<Account>().FirstOrDefault() is not { } selectedAccount
-            || selectedAccount.Id == item.BoundAccount?.Id)
+            || e.AddedItems.OfType<Account>().FirstOrDefault() is not { } selectedAccount)
         {
             return;
         }

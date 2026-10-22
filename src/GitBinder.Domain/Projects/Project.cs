@@ -3,7 +3,7 @@ using GitBinder.Domain.Projects;
 namespace GitBinder.Domain.Projects;
 
 /// <summary>
-/// 项目聚合，表示一个本机已存在的 Git Repository。
+/// 项目聚合，表示一个本机项目目录；可以尚未初始化 Git
 /// </summary>
 public sealed class Project
 {
@@ -32,6 +32,13 @@ public sealed class Project
 
     /// <summary>当前分支。</summary>
     public string CurrentBranch { get; set; } = string.Empty;
+
+    /// <summary>尚无 Git 元数据的本地目录；仅由登记信息判断，不进行磁盘或 Git 操作</summary>
+    public bool IsLocalDirectory => string.IsNullOrWhiteSpace(GitDir)
+        && string.IsNullOrWhiteSpace(OriginUrl)
+        && string.IsNullOrWhiteSpace(RemoteHost)
+        && RemoteProtocol == RemoteProtocol.Unknown
+        && string.IsNullOrWhiteSpace(CurrentBranch);
 
     /// <summary>最近一次连接测试结果。</summary>
     public string LastTestResult { get; set; } = string.Empty;

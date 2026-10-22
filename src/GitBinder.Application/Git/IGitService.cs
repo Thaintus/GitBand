@@ -16,6 +16,9 @@ public interface IGitLocator
 /// </summary>
 public interface IGitService
 {
+    /// <summary>显式初始化现存目录自身的 Git 仓库，不添加文件、提交或联网</summary>
+    Task<Result> InitializeRepositoryAsync(string path, CancellationToken ct = default);
+
     /// <summary>校验目录是否为有效 Git 仓库。</summary>
     Task<bool> ValidateRepositoryAsync(string path, CancellationToken ct = default);
 

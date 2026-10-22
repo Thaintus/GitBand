@@ -47,7 +47,10 @@ public class BindingServiceTests
 
     private static string MakeRepoPath() => Path.Combine(Path.GetTempPath(), "gitbinder-test-" + Guid.NewGuid().ToString("N"));
 
-    private static Project MakeProject(string path) => new() { Id = Guid.NewGuid(), RepositoryPath = path };
+    private static Project MakeProject(string path) => new()
+    {
+        Id = Guid.NewGuid(), RepositoryPath = path, GitDir = Path.Combine(path, ".git"),
+    };
 
     [Fact]
     public void Bind_AppliesIdentityAndSshCommand()

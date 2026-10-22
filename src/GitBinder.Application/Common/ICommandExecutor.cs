@@ -11,7 +11,20 @@ public sealed class CommandResult
 
     public string StdErr { get; init; } = string.Empty;
 
-    public bool IsSuccess => ExitCode == 0;
+    public bool TerminationUnconfirmed { get; init; }
+
+    public bool IsSuccess => ExitCode == 0 && !TerminationUnconfirmed;
+
+    public void ThrowIfTerminationUnconfirmed()
+    {
+        if (TerminationUnconfirmed) throw new CommandTerminationUnconfirmedException(ExitCode);
+    }
+}
+
+public sealed class CommandTerminationUnconfirmedException(int exitCode = -1)
+    : Exception("External command termination could not be confirmed.")
+{
+    public int ExitCode { get; } = exitCode;
 }
 
 /// <summary>

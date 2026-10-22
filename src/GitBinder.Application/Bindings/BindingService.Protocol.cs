@@ -92,6 +92,9 @@ public sealed partial class BindingService
             var project = await _projectRepository.GetByIdAsync(projectId, ct);
             if (project is null)
                 return ProtocolFailure("PROJECT_NOT_FOUND", projectId.ToString());
+            // 普通目录不能通过协议预览或确认入口接管后来出现的父级仓库
+            if (project.IsLocalDirectory)
+                return ProtocolFailure("PROJECT_GIT_NOT_INITIALIZED");
             if (!await _gitService.ValidateRepositoryAsync(project.RepositoryPath, ct))
                 return ProtocolFailure("PROJECT_REPOSITORY_NOT_FOUND", project.RepositoryPath);
 

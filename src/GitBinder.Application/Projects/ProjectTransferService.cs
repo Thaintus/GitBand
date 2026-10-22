@@ -14,12 +14,20 @@ public sealed class ProjectTransferService(
     IAccountRepository accounts, BindingService bindings, EffectiveAccountResolver resolver,
     IPathNormalizer paths, IProjectGroupRepository groups)
 {
-    private readonly SemaphoreSlim _operation = new(1, 1);
+    private readonly object _operationGate = new();
+    private readonly HashSet<Guid> _pullingProjects = [];
+    private bool _cloneRunning;
+    private bool _groupPullRunning;
 
     public async Task<Result> CloneAsync(string remoteUrl, string parentDirectory, string folderName,
         Guid accountId, CancellationToken ct = default)
     {
-        if (!await _operation.WaitAsync(0, ct)) return Fail("TRANSFER_BUSY");
+        ct.ThrowIfCancellationRequested();
+        lock (_operationGate)
+        {
+            if (_groupPullRunning || _cloneRunning) return Fail("TRANSFER_BUSY");
+            _cloneRunning = true;
+        }
         var cloned = false;
         var registered = false;
         try
@@ -62,22 +70,31 @@ public sealed class ProjectTransferService(
             if (cloned) return Fail("CLONE_REGISTER_FAILED");
             return Fail(ct.IsCancellationRequested ? "TRANSFER_CANCELLED" : "CLONE_FAILED");
         }
-        finally { _operation.Release(); }
+        finally { lock (_operationGate) _cloneRunning = false; }
     }
 
     public async Task<Result> PullAsync(Guid projectId, CancellationToken ct = default)
     {
-        if (!await _operation.WaitAsync(0, ct)) return Fail("TRANSFER_BUSY");
+        ct.ThrowIfCancellationRequested();
+        lock (_operationGate)
+        {
+            if (_groupPullRunning || !_pullingProjects.Add(projectId)) return Fail("TRANSFER_BUSY");
+        }
         try { return await PullCoreAsync(projectId, ct); }
-        finally { _operation.Release(); }
+        finally { lock (_operationGate) _pullingProjects.Remove(projectId); }
     }
 
-    /// <summary>按完整分组快照依次拉取，与界面搜索结果无关；整个批次共用传输互斥锁。</summary>
+    /// <summary>按完整分组快照依次拉取，与界面搜索结果无关；整个批次独占传输</summary>
     public async Task<Result<GroupPullReport>> PullGroupAsync(Guid? groupId, bool allProjects,
         IProgress<GroupPullProgress>? progress = null, CancellationToken ct = default)
     {
-        if (!await _operation.WaitAsync(0, ct))
-            return Result<GroupPullReport>.Failure(new DomainError("TRANSFER_BUSY"));
+        ct.ThrowIfCancellationRequested();
+        lock (_operationGate)
+        {
+            if (_groupPullRunning || _cloneRunning || _pullingProjects.Count > 0)
+                return Result<GroupPullReport>.Failure(new DomainError("TRANSFER_BUSY"));
+            _groupPullRunning = true;
+        }
         try
         {
             if (!allProjects && groupId.HasValue && !(await groups.GetAllAsync(ct)).Any(g => g.Id == groupId))
@@ -100,7 +117,7 @@ public sealed class ProjectTransferService(
             return Result<GroupPullReport>.Failure(new DomainError("TRANSFER_CANCELLED"));
         }
         catch (Exception) { return Result<GroupPullReport>.Failure(new DomainError("TRANSFER_FAILED")); }
-        finally { _operation.Release(); }
+        finally { lock (_operationGate) _groupPullRunning = false; }
     }
 
     private async Task<Result> PullCoreAsync(Guid projectId, CancellationToken ct)
@@ -110,6 +127,12 @@ public sealed class ProjectTransferService(
         {
             var project = await repository.GetByIdAsync(projectId, ct);
             if (project is null) return Fail("PROJECT_NOT_FOUND");
+            // 分组拉取没有页面的单项预检，读取最新状态并拦截纯目录
+            // 是否有可拉取远程由 Git 当前分支配置决定，不能只检查缓存中的 origin
+            var metadata = await projects.RefreshMetadataAsync(projectId, ct);
+            if (!metadata.IsSuccess) return Result.Failure(metadata.Error!);
+            project = metadata.Value!;
+            if (project.IsLocalDirectory) return Fail("PROJECT_GIT_NOT_INITIALIZED");
             var account = resolver.Resolve(project);
             if (account is null || !account.Enabled) return Fail("TRANSFER_ACCOUNT_INVALID");
             var result = await transfer.PullAsync(project.RepositoryPath, account, ct);

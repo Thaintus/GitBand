@@ -12,12 +12,13 @@ public sealed class WindowsShellService : IShellService
     {
         if (Directory.Exists(path))
         {
-            Process.Start(new ProcessStartInfo
+            var startInfo = new ProcessStartInfo
             {
                 FileName = "explorer.exe",
-                Arguments = $"\"{path}\"",
                 UseShellExecute = true,
-            });
+            };
+            startInfo.ArgumentList.Add(Path.GetFullPath(path));
+            Process.Start(startInfo);
         }
     }
 

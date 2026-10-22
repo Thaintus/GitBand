@@ -234,7 +234,7 @@ public class GlobalModeServiceTests
         Directory.CreateDirectory(repositoryPath);
         try
         {
-            var project = new Project { RepositoryPath = repositoryPath };
+            var project = new Project { RepositoryPath = repositoryPath, GitDir = Path.Combine(repositoryPath, ".git") };
             projectRepo.AddAsync(project).GetAwaiter().GetResult();
             bindingRepo.AddAsync(new Binding { ProjectId = project.Id, AccountId = bound.Id }).GetAwaiter().GetResult();
 

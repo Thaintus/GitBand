@@ -179,7 +179,7 @@ public sealed class ListFilteringViewModelTests
     }
 
     [Fact]
-    public async Task Projects_BusyBindingIgnoresRepeatedSelectionWithoutWritingBinding()
+    public async Task Projects_BusyBindingWithoutAcceptedChoiceRestoresBoundAccountWithoutWritingBinding()
     {
         var fixture = new Fixture();
         var bound = new Account { Alias = "Bound" };
@@ -190,7 +190,7 @@ public sealed class ListFilteringViewModelTests
             await fixture.Accounts.AddAsync(account);
         }
 
-        var project = new Project { Name = "Alpha" };
+        var project = new Project { Name = "Alpha", GitDir = Path.Combine("Alpha", ".git") };
         await fixture.Projects.AddAsync(project);
         await fixture.Bindings.AddAsync(new Binding { ProjectId = project.Id, AccountId = bound.Id });
         var viewModel = fixture.CreateProjects();
@@ -201,7 +201,7 @@ public sealed class ListFilteringViewModelTests
 
         await viewModel.SwitchBindingAccountAsync(item, repeated);
 
-        Assert.Same(pending, item.SelectedBindingAccount);
+        Assert.Same(bound, item.SelectedBindingAccount);
         Assert.True(item.IsSwitchingBinding);
         Assert.Same(item, Assert.Single(viewModel.Items));
         Assert.Equal(bound.Id, (await fixture.Bindings.GetByProjectIdAsync(project.Id))!.AccountId);
@@ -383,7 +383,10 @@ public sealed class ListFilteringViewModelTests
     public async Task Projects_LoadRefreshesUnknownProtocolFromLocalOrigin()
     {
         var fixture = new Fixture();
-        var project = new Project { Name = "Moved", RepositoryPath = @"D:\moved" };
+        var project = new Project
+        {
+            Name = "Moved", RepositoryPath = @"D:\moved", GitDir = Path.Combine(@"D:\moved", ".git"),
+        };
         await fixture.Projects.AddAsync(project);
         var viewModel = fixture.CreateProjects(new FakeGitService { OriginUrl = "https://gitee.com/team/moved.git" });
 
