@@ -1,5 +1,6 @@
 using GitBinder.Application.Accounts;
 using GitBinder.Application.Bindings;
+using GitBinder.Application.Git;
 using GitBinder.Application.Projects;
 using GitBinder.Application.Security;
 using GitBinder.Domain.Accounts;
@@ -13,6 +14,62 @@ namespace GitBinder.Tests;
 
 public class BindingServiceTests
 {
+    [Fact]
+    public async Task SynchronizeRecordedBinding_UniqueMatchUpdatesRecordWithoutWritingGit()
+    {
+        var (service, accounts, projects, bindings, snapshots, config) = CreateSut();
+        var project = MakeProject("X:/not-created"); project.RemoteHost = "example.org";
+        await projects.AddAsync(project);
+        var old = MakeAccount("old");
+        var match = MakeAccount("match");
+        match.GitName = "current"; match.GitEmail = "current@example.org"; match.Host = "example.org";
+        await accounts.AddAsync(old); await accounts.AddAsync(match);
+        var original = new Binding { ProjectId = project.Id, AccountId = old.Id,
+            VerifiedAt = DateTimeOffset.UtcNow, LastTestResult = "old result" };
+        await bindings.AddAsync(original);
+        var snapshot = new GitBinder.Domain.GlobalMode.RepositorySnapshot { ProjectId = project.Id,
+            EmailConfig = new GitBinder.Domain.GlobalMode.GitEmailConfigSnapshot("original@example.org", null, null) };
+        await snapshots.SaveAsync(snapshot);
+        config.ThrowOnApply = true;
+        var result = await service.SynchronizeRecordedBindingAsync(project.Id, new RepositoryIdentity("current", "current@example.org"));
+        Assert.True(result.IsSuccess);
+        var recorded = await bindings.GetByProjectIdAsync(project.Id);
+        Assert.Equal(original.Id, recorded!.Id);
+        Assert.Equal(match.Id, recorded.AccountId);
+        Assert.Equal(old.Id, original.AccountId);
+        Assert.Null(recorded.VerifiedAt);
+        Assert.Empty(recorded.LastTestResult);
+        Assert.Same(snapshot, await snapshots.GetByProjectIdAsync(project.Id));
+        Assert.Equal(0, config.ApplyIdentityCount);
+        Assert.Equal(0, config.ApplySshCommandCount);
+        Assert.Equal(0, config.ApplyCredentialHelperCount);
+        Assert.Equal(0, config.RestoreCount);
+    }
+
+    [Theory]
+    [InlineData(0, "BINDING_REFRESH_NO_MATCH")]
+    [InlineData(2, "BINDING_REFRESH_AMBIGUOUS")]
+    public async Task SynchronizeRecordedBinding_NonUniqueMatchPreservesBinding(int count, string error)
+    {
+        var (service, accounts, projects, bindings, _, config) = CreateSut();
+        var project = MakeProject("X:/not-created"); project.RemoteHost = "example.org";
+        await projects.AddAsync(project);
+        var original = new Binding { ProjectId = project.Id, AccountId = Guid.NewGuid() };
+        await bindings.AddAsync(original);
+        for (var i = 0; i < count; i++)
+        {
+            var candidate = MakeAccount("candidate-" + i);
+            candidate.GitName = "current"; candidate.GitEmail = "current@example.org"; candidate.Host = "example.org";
+            await accounts.AddAsync(candidate);
+        }
+        var result = await service.SynchronizeRecordedBindingAsync(project.Id, new RepositoryIdentity("current", "current@example.org"));
+        Assert.False(result.IsSuccess);
+        Assert.Equal(error, result.Error!.Code);
+        Assert.Same(original, await bindings.GetByProjectIdAsync(project.Id));
+        Assert.Equal(0, config.ApplyIdentityCount);
+        Assert.Equal(0, config.RestoreCount);
+    }
+
     private static (
         BindingService,
         FakeAccountRepository,

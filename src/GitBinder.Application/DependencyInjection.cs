@@ -18,6 +18,7 @@ public static class DependencyInjection
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
         // 应用服务。
+        services.AddSingleton<ListOrderService>();
         services.AddSingleton<AccountService>();
         services.AddSingleton<AccountIdentitySyncService>();
         services.AddSingleton<PlatformService>();

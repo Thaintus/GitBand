@@ -20,94 +20,32 @@ namespace GitBinder.Tests;
 /// <summary>启动同步只使用内存端口，不创建窗口、数据库、目录或执行真实 Git</summary>
 public sealed class MainInitializationConcurrencyTests
 {
-    [Fact]
-    public async Task Initialize_BlocksProjectWritesButAllowsNavigationAndRefreshesBeforeUnlocking()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Initialize_ReadsRecordedDataWithoutApplyingRepositoryIdentity(bool globalEnabled)
     {
-        var f = await Fixture.CreateAsync();
-        var item = Assert.Single(f.Projects.Items);
-        f.Git.OriginUrl = "https://example.org/team/updated.git";
-        var initializing = f.Main.InitializeAsync();
-        try
-        {
-            await f.Applier.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-
-            Assert.True(f.Projects.HasPendingOperations);
-            Assert.False(f.Projects.CanManageProjects);
-            Assert.False(item.CanPull);
-            Assert.False(item.CanTest);
-            Assert.False(f.Main.CanChangeGlobalMode);
-            Assert.False(f.Main.CanCloseWithEscape);
-            Assert.False(f.Main.EnableGlobalModeCommand.CanExecute(null));
-            await f.Projects.PullCommand.ExecuteAsync(item).WaitAsync(TimeSpan.FromSeconds(5));
-            await f.Projects.TestBindingCommand.ExecuteAsync(item).WaitAsync(TimeSpan.FromSeconds(5));
-            f.Projects.StartEditRemoteCommand.Execute(item);
-            Assert.Equal(0, f.Transfer.PullCount);
-            Assert.Equal(0, f.Transfer.TestCount);
-            Assert.False(item.IsRemoteEditorOpen);
-
-            f.Main.SelectedNav = f.Main.NavigationItems.Single(nav => nav.Key == "Nav.Accounts");
-            Assert.Same(f.Accounts, f.Main.CurrentPage);
-            Assert.Single(f.Accounts.Items);
-            f.Main.SelectedNav = f.Main.NavigationItems.Single(nav => nav.Key == "Nav.Projects");
-            Assert.Same(f.Projects, f.Main.CurrentPage);
-            Assert.Equal(Fixture.OriginalOrigin, item.Project.OriginUrl);
-            Assert.False(initializing.IsCompleted);
-
-            f.Applier.Completion.TrySetResult(Result.Success());
-            await initializing.WaitAsync(TimeSpan.FromSeconds(5));
-
-            Assert.Same(item, Assert.Single(f.Projects.Items));
-            Assert.Equal(f.Git.OriginUrl, item.Project.OriginUrl);
-            Assert.Single(f.Main.Accounts);
-            Assert.False(f.Projects.HasPendingOperations);
-            Assert.True(item.CanPull);
-            Assert.True(item.CanTest);
-            Assert.True(f.Main.CanChangeGlobalMode);
-            Assert.True(f.Main.EnableGlobalModeCommand.CanExecute(null));
-            Assert.True(f.Main.CanCloseWithEscape);
-            Assert.Empty(f.Main.GlobalModeFeedback);
-            Assert.Equal(1, f.Applier.RestoreCalls);
-            Assert.Equal(1, f.Dashboard.ProjectCount);
-        }
-        finally
-        {
-            f.Applier.Completion.TrySetResult(Result.Success());
-            await initializing.WaitAsync(TimeSpan.FromSeconds(5));
-        }
-    }
-
-    [Fact]
-    public async Task Initialize_ApplierExceptionReleasesGateAndShowsOnlySafeFeedback()
-    {
-        var f = await Fixture.CreateAsync();
-        var item = Assert.Single(f.Projects.Items);
-        var initializing = f.Main.InitializeAsync();
-        try
-        {
-            await f.Applier.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.True(f.Projects.HasPendingOperations);
-
-            f.Applier.Completion.TrySetException(new IOException("fictional-sensitive-startup-detail"));
-            await initializing.WaitAsync(TimeSpan.FromSeconds(5));
-
-            Assert.Equal("GlobalMode.OperationFailed", f.Main.GlobalModeFeedback);
-            Assert.DoesNotContain("fictional-sensitive-startup-detail", f.Main.GlobalModeFeedback);
-            Assert.False(f.Projects.HasPendingOperations);
-            Assert.True(f.Projects.CanManageProjects);
-            Assert.True(item.CanPull);
-            Assert.True(f.Main.CanChangeGlobalMode);
-            Assert.True(f.Main.CanCloseWithEscape);
-            Assert.Equal(1, f.Dashboard.ProjectCount);
-            Assert.Equal(0, f.Transfer.PullCount);
-            Assert.Equal(0, f.Transfer.TestCount);
-            Assert.True(f.Projects.TryBeginExternalOperation());
-            f.Projects.EndExternalOperation();
-        }
-        finally
-        {
-            f.Applier.Completion.TrySetResult(Result.Success());
-            await initializing.WaitAsync(TimeSpan.FromSeconds(5));
-        }
+        var f = await Fixture.CreateAsync(preloadProjects: false, globalEnabled: globalEnabled);
+        f.Git.OriginUrl = "https://example.org/changed-outside-app.git";
+        Assert.Empty(f.Projects.Items);
+        await f.Main.InitializeAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Single(f.Main.Accounts);
+        var item = Assert.Single(f.Projects.FilteredItems);
+        Assert.Equal(Fixture.OriginalOrigin, item.Project.OriginUrl);
+        Assert.Equal(globalEnabled, f.Main.GlobalModeEnabled);
+        Assert.Equal(0, f.Applier.RestoreCalls);
+        Assert.False(f.Applier.Entered.Task.IsCompleted);
+        Assert.False(f.Projects.IsExternalOperationBusy);
+        Assert.False(f.Projects.HasPendingOperations);
+        Assert.True(f.Projects.CanManageProjects);
+        Assert.True(f.Main.CanChangeGlobalMode);
+        Assert.Equal(0, f.Transfer.PullCount);
+        Assert.Equal(0, f.Transfer.TestCount);
+        Assert.Empty(f.Main.GlobalModeFeedback);
+        Assert.Equal(1, f.Dashboard.ProjectCount);
+        await f.Main.InitializeAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Same(item, Assert.Single(f.Projects.Items));
+        Assert.Equal(0, f.Applier.RestoreCalls);
     }
 
     private sealed class Fixture
@@ -121,7 +59,7 @@ public sealed class MainInitializationConcurrencyTests
         public DashboardViewModel Dashboard { get; private set; } = null!;
         public MainViewModel Main { get; private set; } = null!;
 
-        public static async Task<Fixture> CreateAsync()
+        public static async Task<Fixture> CreateAsync(bool preloadProjects = true, bool globalEnabled = false)
         {
             var f = new Fixture();
             var accounts = new FakeAccountRepository();
@@ -144,6 +82,8 @@ public sealed class MainInitializationConcurrencyTests
                 GitDir = Path.Combine(path, ".git"), OriginUrl = OriginalOrigin,
                 RemoteHost = "example.org", RemoteProtocol = RemoteProtocol.Https, CurrentBranch = "main",
             };
+            await settings.SetAsync("global_mode.enabled", globalEnabled.ToString());
+            await settings.SetAsync("global_mode.account_id", account.Id.ToString());
             await accounts.AddAsync(account);
             await projects.AddAsync(project);
             await bindings.AddAsync(new Binding { ProjectId = project.Id, AccountId = account.Id });
@@ -157,7 +97,7 @@ public sealed class MainInitializationConcurrencyTests
             f.Projects = new ProjectsViewModel(projects, projectService, bindings, accounts, bindingService,
                 resolver, localization, () => throw new InvalidOperationException("No directory picker expected"),
                 transferService, new ProjectGroupService(groups));
-            await f.Projects.LoadAsync();
+            if (preloadProjects) await f.Projects.LoadAsync();
             f.Accounts = new AccountsViewModel(accounts,
                 new AccountService(accounts, new BindingDeletionGuard(bindings), new SecretService(secrets), new FakePrivateKeyImporter()),
                 localization, new NoUiServiceProvider(), f.Projects);

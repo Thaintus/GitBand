@@ -43,6 +43,10 @@ public interface IGitService
     /// <summary>获取当前分支。</summary>
     Task<string?> GetCurrentBranchAsync(string path, CancellationToken ct = default);
 
+    /// <summary>只读当前有效的 user.name / user.email（包含全局配置继承），null 表示读取失败。</summary>
+    Task<RepositoryIdentity?> GetCurrentIdentityAsync(string path, CancellationToken ct = default)
+        => Task.FromResult<RepositoryIdentity?>(null);
+
     /// <summary>解析 Remote URL 为协议与主机。</summary>
     (RemoteProtocol Protocol, string Host) ParseRemote(string url);
 

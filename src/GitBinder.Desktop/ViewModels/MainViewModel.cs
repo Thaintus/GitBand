@@ -19,6 +19,7 @@ public partial class MainViewModel : ViewModelBase
     private readonly GlobalModeService _globalModeService;
     private readonly IAccountRepository _accountRepository;
     private readonly SemaphoreSlim _globalModeLoadGate = new(1, 1);
+    private readonly Dictionary<ViewModelBase, Task> _navigationLoads = [];
 
     private readonly DashboardViewModel _dashboard;
     private readonly AccountsViewModel _accounts;
@@ -105,7 +106,8 @@ public partial class MainViewModel : ViewModelBase
         RefreshLocalization();
 
         _currentPage = _dashboard;
-        SelectedNav = NavigationItems[0];
+        // 构造时只设置初始选择；首次读取统一交给 InitializeAsync，避免总览加载两次。
+        _selectedNav = NavigationItems[0];
     }
 
     private void BuildNavigation()
@@ -144,7 +146,14 @@ public partial class MainViewModel : ViewModelBase
     }
 
     /// <summary>导航切换后即时加载该页面的数据，避免升级或首次进入时看到空列表。</summary>
-    private async Task LoadPageAsync(ViewModelBase page)
+    private Task LoadPageAsync(ViewModelBase page)
+    {
+        if (_navigationLoads.TryGetValue(page, out var pending) && !pending.IsCompleted) return pending;
+        // 只合并进行中的导航读取；保存后的显式 LoadAsync 仍保持独立的新鲜读取。
+        return _navigationLoads[page] = LoadPageCoreAsync(page);
+    }
+
+    private async Task LoadPageCoreAsync(ViewModelBase page)
     {
         try
         {
@@ -191,8 +200,8 @@ public partial class MainViewModel : ViewModelBase
         try
         {
             // 完整读完快照再更新控件，串行读取避免旧请求最后覆盖新账号状态
-            var all = await _accountRepository.GetAllAsync();
-            var config = await _globalModeService.GetConfigAsync();
+            var (all, config) = await Task.Run(async () =>
+                (await _accountRepository.GetAllAsync(), await _globalModeService.GetConfigAsync()));
             Accounts.Clear();
             foreach (var account in all) Accounts.Add(account);
             GlobalModeEnabled = config.Enabled;
@@ -247,7 +256,8 @@ public partial class MainViewModel : ViewModelBase
         try
         {
             GlobalModeFeedback = string.Empty;
-            var result = await operation();
+            // 服务只操作存储和 Git；进程启动及 SQLite 同步入口不能占用 UI 线程。
+            var result = await Task.Run(operation);
             await LoadGlobalModeAsync();
             await _projects.ReloadAfterExternalOperationAsync();
             if (!result.IsSuccess)
@@ -262,11 +272,12 @@ public partial class MainViewModel : ViewModelBase
 
     public async Task InitializeAsync()
     {
-        // 启动重应用也可能写入多个仓库，必须在首次 await 前取得与页面操作相同的门禁
-        await RunGlobalModeOperationAsync(() => _globalModeService.EnsureAppliedAsync());
         try
         {
-            await _dashboard.LoadAsync();
+            // 启动只恢复已登记的展示信息；仓库配置仅由用户明确操作时写入。
+            await LoadGlobalModeAsync();
+            await _projects.LoadStoredAsync();
+            await LoadPageAsync(_dashboard);
         }
         catch (Exception)
         {

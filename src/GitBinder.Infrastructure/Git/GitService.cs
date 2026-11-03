@@ -201,6 +201,22 @@ public sealed class GitService : IGitService
         return result;
     }
 
+    public async Task<RepositoryIdentity?> GetCurrentIdentityAsync(string path, CancellationToken ct = default)
+    {
+        var git = await ResolveGitAsync(ct);
+        async Task<(bool Success, string? Value)> ReadAsync(string key)
+        {
+            var result = await ExecuteRepositoryAsync(git, ["config", "--null", "--get", key], path, ct);
+            if (result.ExitCode == 1) return (true, null);
+            if (!result.IsSuccess || !result.StdOut.EndsWith('\0')) return (false, null);
+            return (true, result.StdOut[..^1]);
+        }
+        var name = await ReadAsync("user.name");
+        if (!name.Success) return null;
+        var email = await ReadAsync("user.email");
+        return email.Success ? new RepositoryIdentity(name.Value, email.Value) : null;
+    }
+
     public async Task<bool> ValidateRepositoryAsync(string path, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
@@ -221,21 +237,15 @@ public sealed class GitService : IGitService
     {
         ct.ThrowIfCancellationRequested();
         var git = await ResolveGitAsync(ct);
-        var result = await ExecuteRepositoryAsync(git, ["rev-parse", "--git-dir"], path, ct);
+        var result = await ExecuteRepositoryAsync(git, ["rev-parse", "--absolute-git-dir"], path, ct);
         if (!result.IsSuccess)
         {
             return null;
         }
 
         var gitDir = result.StdOut.Trim();
-        // 转换为绝对路径
-        if (!Path.IsPathRooted(gitDir))
-        {
-            var root = await GetRepositoryRootAsync(path, ct) ?? path;
-            gitDir = Path.GetFullPath(Path.Combine(root, gitDir));
-        }
-
-        return gitDir;
+        // Git 直接返回真实 GitDir，避免相对路径再查询根目录而额外启动一次进程。
+        return Path.IsPathFullyQualified(gitDir) ? gitDir : null;
     }
 
     public async Task<string?> GetOriginUrlAsync(string path, CancellationToken ct = default)

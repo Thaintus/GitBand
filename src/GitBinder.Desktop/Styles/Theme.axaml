@@ -1,4 +1,7 @@
 <Styles xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Style Selector="Border.reorder-group">
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
     <Styles.Resources>
         <!-- 独立主题隔离 Fluent 的模板状态色，避免悬停时覆盖危险按钮的红色。 -->
         <ControlTheme x:Key="GitBindButtonTheme" TargetType="Button">
@@ -43,6 +46,16 @@
             </Setter>
         </ControlTheme>
     </Styles.Resources>
+
+    <Style Selector="HyperlinkButton.project-link">
+        <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="HyperlinkButton.project-link TextBlock.project-link-text">
+        <Setter Property="TextDecorations" Value="{x:Null}" />
+    </Style>
+    <Style Selector="HyperlinkButton.project-link:pointerover TextBlock.project-link-text">
+        <Setter Property="TextDecorations" Value="Underline" />
+    </Style>
 
     <Style Selector="Window">
         <Setter Property="Background" Value="{DynamicResource AppBackgroundBrush}" />
@@ -494,5 +507,11 @@
         <Setter Property="SelectionBrush" Value="{DynamicResource PrimaryBrush}" />
         <Setter Property="SelectionForegroundBrush" Value="{DynamicResource OnPrimaryBrush}" />
         <Setter Property="Focusable" Value="True" />
+    </Style>
+    <!-- 拖动状态放在普通卡片样式之后，确保预览背景与描边不会被覆盖。 -->
+    <Style Selector="Border.reorder-item.reorder-preview">
+        <Setter Property="BorderBrush" Value="{DynamicResource PrimaryBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Background" Value="{DynamicResource PrimarySoftBrush}" />
     </Style>
 </Styles>

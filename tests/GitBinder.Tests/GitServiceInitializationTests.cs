@@ -196,7 +196,9 @@ public sealed class GitServiceInitializationTests
 
         Assert.True(await service.ValidateRepositoryAsync(fixture.DirectoryPath));
         Assert.Equal(fixture.DirectoryPath, await service.GetRepositoryRootAsync(fixture.DirectoryPath));
+        var beforeGitDirRead = executor.Calls.Count;
         Assert.Equal(Path.Combine(fixture.DirectoryPath, ".git"), await service.GetGitDirAsync(fixture.DirectoryPath));
+        Assert.Equal(new[] { "rev-parse", "--absolute-git-dir" }, Command(Assert.Single(executor.Calls.Skip(beforeGitDirRead)).Arguments));
         Assert.Equal(executor.OriginUrl, await service.GetOriginUrlAsync(fixture.DirectoryPath));
         Assert.Equal("main", await service.GetCurrentBranchAsync(fixture.DirectoryPath));
         Assert.True((await service.SetOriginUrlAsync(fixture.DirectoryPath, "git@example.invalid:team/project.git")).IsSuccess);
@@ -328,7 +330,12 @@ public sealed class GitServiceInitializationTests
             if (command[0] == "rev-parse")
                 return Task.FromResult(new CommandResult
                 {
-                    ExitCode = 0, StdOut = command[1] == "--git-dir" ? ".git" : directory,
+                    ExitCode = 0, StdOut = command[1] switch
+                    {
+                        "--git-dir" => ".git",
+                        "--absolute-git-dir" => Path.Combine(directory, ".git"),
+                        _ => directory,
+                    },
                 });
             if (command[0] == "branch")
                 return Task.FromResult(new CommandResult { ExitCode = 0, StdOut = "main" });

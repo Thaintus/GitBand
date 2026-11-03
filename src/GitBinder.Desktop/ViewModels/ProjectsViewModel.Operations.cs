@@ -13,6 +13,7 @@ public partial class ProjectsViewModel
     private readonly Dictionary<Guid, ProjectOperation> _projectOperations = [];
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
     private int _pendingLoads;
+    private bool _lastPageOperationBusy;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanManageProjects))]
@@ -20,6 +21,7 @@ public partial class ProjectsViewModel
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanManageProjects))]
+    [NotifyPropertyChangedFor(nameof(HasPageProgress))]
     private bool _isExternalOperationBusy;
 
     public bool HasProjectOperations
@@ -43,7 +45,7 @@ public partial class ProjectsViewModel
     public void EndExternalOperation() => IsExternalOperationBusy = false;
 
     public Task ReloadAfterExternalOperationAsync() => IsExternalOperationBusy
-        ? ReloadProjectsAsync(allowPageOperation: true) : Task.CompletedTask;
+        ? ReloadProjectsAsync(allowPageOperation: true, refreshMetadata: false) : Task.CompletedTask;
 
     private ProjectOperation? TryBeginProjectOperation(ProjectItemViewModel? item)
     {
@@ -74,7 +76,12 @@ public partial class ProjectsViewModel
         OnPropertyChanged(nameof(HasPendingOperations));
         OnPropertyChanged(nameof(CanPullGroup));
         OnPropertyChanged(nameof(CanManageGroups));
-        foreach (var item in Items) item.IsPageOperationBusy = !CanManageProjects;
+        var pageOperationBusy = !CanManageProjects;
+        if (_lastPageOperationBusy != pageOperationBusy)
+        {
+            _lastPageOperationBusy = pageOperationBusy;
+            foreach (var item in Items) item.IsPageOperationBusy = pageOperationBusy;
+        }
     }
 
     partial void OnIsCloneBusyChanged(bool value) => NotifyOperationState();
@@ -95,52 +102,59 @@ public partial class ProjectsViewModel
         }
     }
 
-    private async Task RefreshProjectAsync(Guid projectId)
+    private async Task RefreshProjectAsync(Guid projectId, bool refreshMetadata = true)
     {
         await _reloadGate.WaitAsync();
         try
         {
-            var accounts = await _accountRepository.GetAllAsync();
-            await RefreshProjectCoreAsync(projectId, accounts);
+            var result = await Task.Run(async () =>
+            {
+                var accounts = await _accountRepository.GetAllAsync();
+                var identity = _effectiveAccountResolver.CaptureDisplaySnapshot(accounts);
+                var snapshot = refreshMetadata
+                    ? await ReadProjectSnapshotAsync(projectId, accounts, identity)
+                    : await ReadStoredProjectSnapshotAsync(projectId, accounts, identity);
+                return (Snapshot: snapshot, Accounts: accounts.Where(account => account.Enabled).ToList());
+            });
+            ApplyProjectSnapshot(result.Snapshot, result.Accounts);
             await ReloadGroupsCoreAsync();
         }
         finally { _reloadGate.Release(); }
     }
 
-    private async Task RefreshProjectCoreAsync(Guid projectId, IReadOnlyList<Account> accounts)
+    [RelayCommand(AllowConcurrentExecutions = true)]
+    private async Task RefreshConfigurationAsync(ProjectItemViewModel? item)
     {
-        var storedProject = await _repository.GetByIdAsync(projectId);
-        var item = Items.FirstOrDefault(current => current.Project.Id == projectId);
-        if (storedProject is null)
+        using var operation = TryBeginProjectOperation(item);
+        if (operation is null || item is null) return;
+        item.OperationProgress = _localization.GetString("Projects.RefreshConfigurationRunning");
+        var synchronized = false;
+        try
         {
-            if (item is not null) Items.Remove(item);
-            if (ReferenceEquals(SelectedItem, item)) SelectedItem = null;
-            HasItems = Items.Count > 0;
-            return;
+            await RefreshProjectAsync(item.Project.Id);
+            if (!Items.Contains(item)) return;
+            if (item.MetadataReadFailed)
+            {
+                Feedback = _localization.GetString("PROJECT_CONFIGURATION_READ_FAILED");
+                return;
+            }
+            var result = await Task.Run(() => _projectService.ReadCurrentIdentityAsync(item.Project.Id));
+            if (!result.IsSuccess)
+            {
+                Feedback = _localization.GetString(result.Error!.Code, result.Error.Arguments);
+                return;
+            }
+            var synced = await Task.Run(() => _bindingService.SynchronizeRecordedBindingAsync(item.Project.Id, result.Value!));
+            if (!synced.IsSuccess)
+            {
+                Feedback = _localization.GetString(synced.Error!.Code, synced.Error.Arguments);
+                return;
+            }
+            synchronized = true;
+            await RefreshProjectAsync(item.Project.Id, refreshMetadata: false);
         }
-
-        var refresh = await _projectService.RefreshMetadataAsync(projectId);
-        var project = refresh.IsSuccess ? refresh.Value! : storedProject;
-        var binding = await _bindingRepository.GetByProjectIdAsync(projectId);
-        var boundAccount = accounts.FirstOrDefault(account => account.Id == binding?.AccountId);
-        var selectableAccounts = accounts.Where(account => account.Enabled).ToList();
-        var warning = refresh.IsSuccess
-            ? (project.IsLocalDirectory ? _localization.GetString("Projects.LocalDirectoryHint")
-                : string.IsNullOrWhiteSpace(project.OriginUrl) ? _localization.GetString("Projects.NoOrigin") : string.Empty)
-            : _localization.GetString(refresh.Error!.Code, refresh.Error.Arguments)
-                + " " + _localization.GetString("Projects.CachedMetadata");
-        if (item is null)
-        {
-            item = new ProjectItemViewModel(project, binding, boundAccount,
-                _effectiveAccountResolver.Resolve(project), _effectiveAccountResolver.ResolveReason(project),
-                selectableAccounts, _localization);
-            Items.Add(item);
-        }
-        item.IsPageOperationBusy = !CanManageProjects;
-        item.ApplySnapshot(project, binding, boundAccount,
-            _effectiveAccountResolver.Resolve(project), _effectiveAccountResolver.ResolveReason(project),
-            selectableAccounts, warning, !refresh.IsSuccess);
-        HasItems = Items.Count > 0;
+        catch (Exception) { Feedback = _localization.GetString(synchronized
+            ? "BINDING_REFRESH_RELOAD_FAILED" : "PROJECT_CONFIGURATION_READ_FAILED"); }
     }
 
     private sealed class ProjectOperation(ProjectsViewModel owner, Guid projectId, ProjectItemViewModel? item) : IDisposable
@@ -222,7 +236,12 @@ public partial class ProjectItemViewModel
     {
         var wasRestoring = IsRestoringSelection;
         IsRestoringSelection = true;
-        try { SelectedBindingAccount = PendingBindingAccount ?? BoundAccount; }
+        try
+        {
+            var requested = PendingBindingAccount ?? BoundAccount;
+            SelectedBindingAccount = AvailableAccounts.FirstOrDefault(account => account.Id == requested?.Id);
+            OnPropertyChanged(nameof(SelectedBindingAccount));
+        }
         finally { IsRestoringSelection = wasRestoring; }
     }
 
@@ -251,10 +270,14 @@ public partial class ProjectItemViewModel
             BoundAccount = boundAccount;
             EffectiveAccount = project.IsLocalDirectory ? null : effectiveAccount;
             EffectiveReason = effectiveReason;
-            AvailableAccounts = accounts;
+            AvailableAccounts = IncludeBoundAccount(accounts, boundAccount);
+            // 先让控件切换 ItemsSource，再设置属于新列表的账号实例。
+            // 否则 SelectedItem 指向新实例时旧列表仍在使用，会清空选择。
+            OnPropertyChanged(nameof(AvailableAccounts));
             MetadataWarning = metadataWarning;
             MetadataReadFailed = metadataReadFailed;
-            SelectedBindingAccount = accounts.FirstOrDefault(account => account.Id == boundAccount?.Id);
+            SelectedBindingAccount = AvailableAccounts.FirstOrDefault(account => account.Id == boundAccount?.Id);
+            OnPropertyChanged(nameof(SelectedBindingAccount));
             OnPropertyChanged(string.Empty);
         }
         finally { IsRestoringSelection = false; }

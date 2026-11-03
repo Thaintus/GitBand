@@ -13,6 +13,7 @@ public partial class DashboardViewModel : ViewModelBase
     private readonly IAccountRepository _accountRepository;
     private readonly IProjectRepository _projectRepository;
     private readonly IBindingRepository _bindingRepository;
+    private readonly SemaphoreSlim _loadGate = new(1, 1);
 
     [ObservableProperty]
     private int _accountCount;
@@ -38,15 +39,22 @@ public partial class DashboardViewModel : ViewModelBase
 
     public async Task LoadAsync()
     {
-        var accounts = await _accountRepository.GetAllAsync();
-        var projects = await _projectRepository.GetAllAsync();
-        var bindings = await _bindingRepository.GetAllAsync();
-
-        AccountCount = accounts.Count;
-        ProjectCount = projects.Count;
-        BindingCount = bindings.Count;
-
-        var defaultAccount = await _accountRepository.GetDefaultAsync();
-        DefaultAccountAlias = defaultAccount?.DisplayAlias ?? string.Empty;
+        await _loadGate.WaitAsync();
+        try
+        {
+            var snapshot = await Task.Run(async () =>
+            {
+                var accounts = await _accountRepository.GetAllAsync();
+                var projects = await _projectRepository.GetAllAsync();
+                var bindings = await _bindingRepository.GetAllAsync();
+                return (Accounts: accounts.Count, Projects: projects.Count, Bindings: bindings.Count,
+                    DefaultAlias: accounts.FirstOrDefault(account => account.IsDefault && account.Enabled)?.DisplayAlias ?? string.Empty);
+            });
+            AccountCount = snapshot.Accounts;
+            ProjectCount = snapshot.Projects;
+            BindingCount = snapshot.Bindings;
+            DefaultAccountAlias = snapshot.DefaultAlias;
+        }
+        finally { _loadGate.Release(); }
     }
 }

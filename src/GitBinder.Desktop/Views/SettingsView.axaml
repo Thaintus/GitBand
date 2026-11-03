@@ -116,6 +116,39 @@
                     </Grid>
                 </StackPanel>
             </Border>
+
+            <Border Classes="card" Padding="20">
+                <StackPanel Spacing="16">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Border Width="32" Height="32" CornerRadius="9" Background="{DynamicResource PrimarySoftBrush}">
+                            <Path Width="17" Height="17" Stretch="Uniform" Stroke="{DynamicResource PrimaryBrush}" StrokeThickness="1.7"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                                  Data="M12,2 A10,10 0 1 1 12,22 A10,10 0 1 1 12,2 M12,10 V17 M12,6 V7" />
+                        </Border>
+                        <TextBlock Classes="section-title" VerticalAlignment="Center" Text="{loc:Loc Settings.About}" />
+                    </StackPanel>
+                    <Border Height="1" Background="{DynamicResource BorderBrush}" />
+                    <Grid ColumnDefinitions="128,*" ColumnSpacing="16" RowDefinitions="Auto,Auto" RowSpacing="12">
+                        <TextBlock Classes="caption" Text="{loc:Loc Settings.ApplicationVersion}" TextWrapping="Wrap" />
+                        <SelectableTextBlock Grid.Column="1" Text="{Binding ApplicationVersion, StringFormat='v{0}'}" TextWrapping="Wrap"
+                                             FontFamily="Cascadia Code, Consolas, Microsoft YaHei UI, monospace" FontSize="12" LineHeight="19"
+                                             Foreground="{DynamicResource TextPrimaryBrush}"
+                                             AutomationProperties.Name="{loc:Loc Settings.ApplicationVersion}" />
+                        <TextBlock Grid.Row="1" Classes="caption" Text="{loc:Loc Settings.Project}" TextWrapping="Wrap" />
+                        <HyperlinkButton Grid.Row="1" Grid.Column="1" Classes="project-link" Click="OnProjectLinkClick"
+                                         HorizontalAlignment="Left" VerticalAlignment="Top" Padding="0" MinHeight="0"
+                                         ToolTip.Tip="{loc:Loc Settings.OpenProject}" AutomationProperties.Name="{loc:Loc Settings.OpenProject}">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="5">
+                                <TextBlock Classes="project-link-text" Text="{Binding ProjectUrl}" TextWrapping="Wrap"
+                                           FontSize="13" LineHeight="19" Foreground="{DynamicResource PrimaryBrush}" />
+                                <Path Grid.Column="1" Width="8" Height="8" Stretch="None" VerticalAlignment="Center"
+                                      Stroke="{DynamicResource PrimaryBrush}" StrokeThickness="1"
+                                      StrokeLineCap="Round" StrokeJoin="Round" Data="M0.5,7.5 L7.5,0.5 M2.5,0.5 H7.5 V5.5" />
+                            </Grid>
+                        </HyperlinkButton>
+                    </Grid>
+                </StackPanel>
+            </Border>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

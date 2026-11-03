@@ -6,6 +6,7 @@ using GitBinder.Application.Git;
 using GitBinder.Application.GlobalMode;
 using GitBinder.Application.Projects;
 using GitBinder.Application.Security;
+using GitBinder.Application.Settings;
 using GitBinder.Desktop;
 using GitBinder.Desktop.Localization;
 using GitBinder.Desktop.ViewModels;
@@ -40,6 +41,7 @@ internal sealed class SmokeFixture
     {
         var bindings = new FakeBindingRepository();
         var settings = new FakeSettingsRepository();
+        var listOrder = new ListOrderService(settings);
         var secrets = new FakeSecretStore();
         var dataPath = new SmokeDataPath(artifacts);
         var git = Git;
@@ -56,11 +58,11 @@ internal sealed class SmokeFixture
             AccountRepository, bindingService, resolver, normalizer, Groups);
         AccountEditor = new AccountEditViewModel(accountService, platformService, Localization, () => Task.FromResult<string?>(null));
         var services = new ServiceCollection().AddTransient(_ => AccountEditor).BuildServiceProvider();
-        Accounts = new AccountsViewModel(AccountRepository, accountService, Localization, services);
+        Accounts = new AccountsViewModel(AccountRepository, accountService, Localization, services, listOrder: listOrder);
         Projects = new ProjectsViewModel(ProjectRepository, projectService, bindings, AccountRepository,
             bindingService, resolver, Localization, () => Task.FromResult<string?>(null),
-            transferService, new ProjectGroupService(Groups));
-        Platforms = new PlatformsViewModel(platformService, Localization);
+            transferService, new ProjectGroupService(Groups), listOrder: listOrder);
+        Platforms = new PlatformsViewModel(platformService, Localization, listOrder: listOrder);
         Settings = new SettingsViewModel(dataPath, new SmokeLocator(), new SmokeLocator(), Localization, settings);
         Dashboard = new DashboardViewModel(AccountRepository, ProjectRepository, bindings);
         var global = new GlobalModeService(settings, AccountRepository, bindingService, new FakeGlobalGitConfigApplier());

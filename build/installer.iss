@@ -7,7 +7,7 @@
 #define MyAppName "GitBinder"
 #define MyAppNameCn "Git 仓库账号绑定管理工具"
 #ifndef MyAppVersion
-  #define MyAppVersion "1.2.5"
+  #define MyAppVersion "1.2.14"
 #endif
 #define MyAppPublisher "GitBinder"
 #define MyAppExeName "GitBinder.Desktop.exe"
@@ -53,12 +53,8 @@ Name: "desktopicon\user"; Description: "仅当前用户"; Flags: exclusive
 Name: "desktopicon\common"; Description: "所有用户"; Flags: exclusive
 
 [Files]
-; 主程序与 Credential Helper（单文件发布）
-Source: "publish\app\GitBinder.Desktop.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "publish\app\gitbinder-credential.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "publish\app\gitbinder.ico"; DestDir: "{app}"; Flags: ignoreversion
-; 其余运行所需文件（若有拆分 dll/pdb 也一并打包）
-Source: "publish\app\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; 两个 apphost 与共享运行时、各自 deps/runtimeconfig 一并安装；不分发调试符号。
+Source: "publish\app\*"; DestDir: "{app}"; Excludes: "*.pdb"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\GitBinder"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\gitbinder.ico"

@@ -5,6 +5,7 @@ using GitBinder.Application.Accounts;
 using GitBinder.Application.Bindings;
 using GitBinder.Application.Common;
 using GitBinder.Application.Projects;
+using GitBinder.Application.Settings;
 using GitBinder.Domain.Accounts;
 using GitBinder.Domain.Bindings;
 using GitBinder.Domain.Projects;
@@ -53,7 +54,7 @@ public partial class ProjectsViewModel : ViewModelBase
 
     public bool HasCloneFeedback => !string.IsNullOrWhiteSpace(CloneFeedback);
     public bool HasOperationProgress => !string.IsNullOrWhiteSpace(OperationProgress);
-    public bool HasPageProgress => !IsCloneEditorOpen && (IsTransferBusy || HasOperationProgress);
+    public bool HasPageProgress => !IsCloneEditorOpen && (IsTransferBusy || HasOperationProgress || IsExternalOperationBusy);
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanManageProjects))]
@@ -106,7 +107,7 @@ public partial class ProjectsViewModel : ViewModelBase
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasNoMatches))]
     [NotifyPropertyChangedFor(nameof(ProjectCountLabel))]
-    private IReadOnlyList<ProjectItemViewModel> _filteredItems = [];
+    private ObservableCollection<ProjectItemViewModel> _filteredItems = [];
 
     [ObservableProperty]
     private ProjectItemViewModel? _selectedItem;
@@ -137,7 +138,8 @@ public partial class ProjectsViewModel : ViewModelBase
         ProjectGroupService groupService,
         Func<string, string, string, Task<bool>>? confirmProtocolChange = null,
         Func<ProjectsViewModel, Task>? showCloneDialog = null,
-        IShellService? shellService = null)
+        IShellService? shellService = null,
+        ListOrderService? listOrder = null)
     {
         _repository = repository;
         _projectService = projectService;
@@ -155,50 +157,7 @@ public partial class ProjectsViewModel : ViewModelBase
             await DialogHelper.ShowDialogAsync<bool>(new Views.CloneRepositoryDialog(viewModel));
         });
         _shellService = shellService;
-    }
-
-    public Task LoadAsync() => ReloadProjectsAsync(allowPageOperation: false);
-
-    private async Task ReloadProjectsAsync(bool allowPageOperation)
-    {
-        if (!allowPageOperation && !CanManageProjects) return;
-        _pendingLoads++;
-        NotifyOperationState();
-        await _reloadGate.WaitAsync();
-        try
-        {
-            var projects = await _repository.GetAllAsync();
-            var accounts = await _accountRepository.GetAllAsync();
-            var selectableAccounts = accounts.Where(account => account.Enabled).ToList();
-            CloneAccounts = selectableAccounts;
-            SelectedCloneAccount = selectableAccounts.FirstOrDefault(a => a.Id == SelectedCloneAccount?.Id)
-                ?? selectableAccounts.FirstOrDefault(a => a.IsDefault) ?? selectableAccounts.FirstOrDefault();
-            foreach (var storedProject in projects)
-            {
-                var item = Items.FirstOrDefault(current => current.Project.Id == storedProject.Id);
-                using var reservation = TryReserveProject(storedProject.Id, item);
-                if (reservation is null) continue;
-                await RefreshProjectCoreAsync(storedProject.Id, accounts);
-            }
-            var storedIds = projects.Select(project => project.Id).ToHashSet();
-            foreach (var item in Items.Where(item => !storedIds.Contains(item.Project.Id)).ToList())
-            {
-                using var reservation = TryReserveProject(item.Project.Id, item);
-                if (reservation is null) continue;
-                // 列表快照之后可能刚登记了项目，移除前重新确认
-                if (await _repository.GetByIdAsync(item.Project.Id) is not null) continue;
-                Items.Remove(item);
-                if (ReferenceEquals(SelectedItem, item)) SelectedItem = null;
-            }
-            HasItems = Items.Count > 0;
-            await ReloadGroupsCoreAsync();
-        }
-        finally
-        {
-            _reloadGate.Release();
-            _pendingLoads--;
-            NotifyOperationState();
-        }
+        _listOrder = listOrder;
     }
 
     partial void OnSearchTextChanged(string value) => ApplyFilter();
@@ -209,7 +168,7 @@ public partial class ProjectsViewModel : ViewModelBase
     /// <summary>仅筛选已载入的项目，复用条目以保留地址编辑与账号选择状态。</summary>
     private void ApplyFilter()
     {
-        FilteredItems = Items.Where(item => (SelectedGroup is null || SelectedGroup.IsAll || item.GroupId == SelectedGroup.Id)
+        var filtered = Items.Where(item => (SelectedGroup is null || SelectedGroup.IsAll || item.GroupId == SelectedGroup.Id)
             && ListSearch.Matches(
             SearchText,
             item.Name,
@@ -219,6 +178,10 @@ public partial class ProjectsViewModel : ViewModelBase
             item.ProtocolText,
             item.BoundAccount?.DisplayAlias,
             item.EffectiveAccount?.DisplayAlias)).ToList();
+        // 保留 ItemsSource，排序和元数据更新不重建整张列表。
+        ListOrdering.Synchronize(FilteredItems, filtered);
+        OnPropertyChanged(nameof(HasNoMatches));
+        OnPropertyChanged(nameof(ProjectCountLabel));
     }
 
     [RelayCommand]
@@ -389,7 +352,12 @@ public partial class ProjectsViewModel : ViewModelBase
     [RelayCommand]
     private void StartEditRemote(ProjectItemViewModel? item)
     {
-        if (item?.CanManageProject == true && CanManageProjects) item.BeginRemoteEdit();
+        if (item?.CanManageProject != true || !CanManageProjects) return;
+
+        if (item.IsRemoteEditorOpen)
+            item.CancelRemoteEdit();
+        else
+            item.BeginRemoteEdit();
     }
 
     [RelayCommand(AllowConcurrentExecutions = true)]
@@ -743,7 +711,7 @@ public partial class ProjectsViewModel : ViewModelBase
 /// <summary>
 /// 项目列表项 ViewModel。
 /// </summary>
-public partial class ProjectItemViewModel : ViewModelBase
+public partial class ProjectItemViewModel : ViewModelBase, IDisposable
 {
     private readonly ILocalizationService _localization;
 
@@ -808,11 +776,19 @@ public partial class ProjectItemViewModel : ViewModelBase
         // 普通目录仅被登记，不能把全局/默认账号标记为已经应用到仓库
         EffectiveAccount = project.IsLocalDirectory ? null : effectiveAccount;
         EffectiveReason = effectiveReason;
-        AvailableAccounts = availableAccounts;
-        SelectedBindingAccount = availableAccounts.FirstOrDefault(account => account.Id == boundAccount?.Id);
+        AvailableAccounts = IncludeBoundAccount(availableAccounts, boundAccount);
+        SelectedBindingAccount = AvailableAccounts.FirstOrDefault(account => account.Id == boundAccount?.Id);
         _localization = localization;
-        _localization.CultureChanged += (_, _) => RefreshLocalization();
+        _localization.CultureChanged += OnCultureChanged;
     }
+
+    private void OnCultureChanged(object? sender, EventArgs e) => RefreshLocalization();
+
+    public void Dispose() => _localization.CultureChanged -= OnCultureChanged;
+
+    private static IReadOnlyList<Account> IncludeBoundAccount(IReadOnlyList<Account> choices, Account? boundAccount)
+        => boundAccount is not null && !choices.Any(account => account.Id == boundAccount.Id)
+            ? [.. choices, boundAccount] : choices;
 
     public string Name => Project.Name;
 
@@ -874,7 +850,12 @@ public partial class ProjectItemViewModel : ViewModelBase
     {
         var wasRestoring = IsRestoringSelection;
         IsRestoringSelection = true;
-        try { SelectedBindingAccount = AvailableAccounts.FirstOrDefault(account => account.Id == BoundAccount?.Id); }
+        try
+        {
+            SelectedBindingAccount = AvailableAccounts.FirstOrDefault(account => account.Id == BoundAccount?.Id);
+            // 单向显示绑定下，即使 VM 值未变，也必须纠正控件中被拒绝的选择。
+            OnPropertyChanged(nameof(SelectedBindingAccount));
+        }
         finally { IsRestoringSelection = wasRestoring; }
     }
 

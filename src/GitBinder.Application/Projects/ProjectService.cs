@@ -36,6 +36,27 @@ public sealed class ProjectService
     public Task<IReadOnlyList<Project>> GetAllAsync(CancellationToken ct = default)
         => _repository.GetAllAsync(ct);
 
+    /// <summary>手动刷新时只读该目录自身仓库的提交身份，不修改 Git 或绑定记录。</summary>
+    public async Task<Result<RepositoryIdentity>> ReadCurrentIdentityAsync(Guid id, CancellationToken ct = default)
+    {
+        try
+        {
+            var project = await _repository.GetByIdAsync(id, ct);
+            if (project is null) return Result<RepositoryIdentity>.Failure(new DomainError("PROJECT_NOT_FOUND"));
+            var root = await _gitService.GetRepositoryRootAsync(project.RepositoryPath, ct);
+            if (string.IsNullOrWhiteSpace(root) || !_pathNormalizer.Equals(root, project.RepositoryPath))
+                return Result<RepositoryIdentity>.Failure(new DomainError("PROJECT_CONFIGURATION_READ_FAILED"));
+            var identity = await _gitService.GetCurrentIdentityAsync(project.RepositoryPath, ct);
+            return identity is null
+                ? Result<RepositoryIdentity>.Failure(new DomainError("PROJECT_CONFIGURATION_READ_FAILED"))
+                : Result<RepositoryIdentity>.Success(identity);
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            return Result<RepositoryIdentity>.Failure(new DomainError("PROJECT_CONFIGURATION_READ_FAILED"));
+        }
+    }
+
     public Task<Project?> GetByIdAsync(Guid id, CancellationToken ct = default)
         => _repository.GetByIdAsync(id, ct);
 

@@ -17,6 +17,39 @@ dotnet tests/GitBinder.UiSmoke/bin/Release/net10.0/GitBinder.UiSmoke.dll
 
 宿主会短暂显示真实验证窗口，遍历页面及弹窗后自动退出。请勿在验证期间操作这些窗口；如需中断，可在启动终端按 Ctrl+C，仅停止本验证进程。不要启动/关闭用户已经安装的软件，也不要结束其他 `dotnet` 进程。
 
+### 拖动专项
+
+使用前文构建后的 DLL，单独运行 `--drag-only`；修改宿主或产品样式后需先重新构建。各专项模式分别执行，不与其他模式参数组合：
+
+```powershell
+dotnet tests/GitBinder.UiSmoke/bin/Release/net10.0/GitBinder.UiSmoke.dll artifacts/verification-drag --drag-only
+```
+
+- `DragPreviewChecks.cs` 在隔离账号列表上发送托管 `PointerPressed` / `PointerMoved` / `PointerReleased` 路由事件，经过产品 `ListReorder` 的真实 500ms 长按等待、指针捕获、命中与预览路径；80ms 短按应不改变顺序。
+- 验证长按后拖到下一项时先实时让位，已实现卡片的屏幕 Y 坐标随顺序变化；源卡片须同时保留预览标记与捕获。检查最终生效的浅主色背景和主色描边，不能只凭 class 存在认定样式正确。
+- Escape 必须还原顺序、释放捕获且保留主窗口，重载内存仓储仍为原序。第二次长按后在已移动的源卡片自身位置松开，必须保存当前预览，重载后仍是该顺序；最后恢复同一 Fixture 的演示顺序。
+- 输出 `results.txt`、`accounts-drag-preview.png`、`accounts-drag-committed.png` 和可选 Avalonia 日志。此专项仅覆盖账号列表的托管拖动路径，不向操作系统注入鼠标/键盘，不代表系统级鼠标驱动或四类列表均已执行指针自动化。
+
+### 资源观察专项
+
+```powershell
+dotnet tests/GitBinder.UiSmoke/bin/Release/net10.0/GitBinder.UiSmoke.dll artifacts/verification-resource --resource-profile
+```
+
+- `ResourceChecks.cs` 分别向内存 Fake 追加 300 个账号、平台及项目，并添加自建分组；最终条数以 `resource-profile.json` 的 Dataset 为准。检查三类列表顶部/底部实际实现容器数与末项可见性，确认没有一次创建全部卡片；反复导航后检查集合和行 VM 引用复用。
+- 四类排序通过公开 VM 预览契约验证位置变化与取消，并对账号执行一次内存设置保存/重载。它不替代 `--drag-only` 的长按、捕获及控件路由验证。截图和导航计时包含主动布局等待，不作为应用响应延迟基准。
+- 观察可见窗口、临时关闭缓存项目视图进度动画的诊断对照、隐藏窗口三个状态；对照完成后恢复原动画值，隐藏/显示也仅操作本隔离宿主。各状态先等待稳定，再通过区间前后 `TotalProcessorTime` 差及墙钟时间计算 CPU 比例，单个逻辑核满载记为 100%。
+- 工作集/私有字节使用 CPU 计时区间之外的前后两个端点读取，避免将 `Process.Refresh` 与内存探测开销混入空闲 CPU 区间。报告中的 min/max 只是这两个端点的较小/较大值，不是连续采样峰值。仅读取 GC 次数及 `GC.GetTotalMemory(false)`，不强制 GC、不裁剪工作集。
+- 输出 `resource-profile.json`、`results.txt` 和相关渲染图。内存包含测试宿主、Fake 数据和渲染器；本模式没有优化前版本 A/B 基线，CPU 比例不是电功率或真实瓦数，不能据此宣称生产应用内存/功耗下降幅度。所有账号、仓库及传输继续隔离，不调用真实 Git、Secret Store 或用户数据库。
+
+## 仅用于归因的资源对照
+
+`--resource-profile --suppress-test-uia` 使用派生的隔离测试窗口，令其 `OnCreateAutomationPeer` 返回 null，以区分外部 UIAutomation 查询带来的开销。此参数只允许与资源模式组合；正常完整回归及正式 MainWindow 均保留辅助功能。该条件下的低 CPU 数值不能作为生产软件性能验收，也不代表可将禁用辅助功能作为优化方案。
+
+`--direct-composition` 仅给测试宿主设置 DirectComposition / RedirectionSurface 后备顺序，不改变产品启动配置。用于与默认 WinUI 合成作诊断对照，一次观测不能证明某个后端是异常根因。
+
+资源模式还统计可见 CPU 区间内的布局、根视图/ListBox 属性、容器及集合变化，并临时隐藏账号视图（特定条件下再只隐藏列表）对照；所有可见性、进度条和事件订阅均在 finally 中恢复。测试输出必须保留诊断条件，不把对照值混为普通可见窗口结果。
+
 ## 覆盖与边界
 
 - 使用实际 App.Initialize 加载真实编译后的资源、样式、ViewLocator；独立重写启动方法且不调用产品启动逻辑，前后断言 App.Services 仍为 null。

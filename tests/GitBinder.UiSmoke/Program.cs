@@ -9,6 +9,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using GitBinder.Desktop;
 using GitBinder.Desktop.Views;
+using GitBinder.Desktop.Controls;
 
 namespace GitBinder.UiSmoke;
 
@@ -18,12 +19,22 @@ internal static class Program
     public static int Main(string[] args)
     {
         SmokeApp.ScreenshotsOnly = args.Contains("--screenshots-only");
-        SmokeApp.OutputDirectory = Path.GetFullPath(args.FirstOrDefault(arg => arg != "--screenshots-only") ?? Path.Combine("tests", "GitBinder.UiSmoke", "artifacts"));
+        SmokeApp.ResourceProfile = args.Contains("--resource-profile");
+        SmokeApp.DragOnly = args.Contains("--drag-only");
+        SmokeApp.SuppressTestAutomation = args.Contains("--suppress-test-uia");
+        if (SmokeApp.SuppressTestAutomation && !SmokeApp.ResourceProfile)
+            throw new ArgumentException("--suppress-test-uia 仅用于隔离资源诊断，不能作为普通界面验收。");
+        SmokeApp.OutputDirectory = Path.GetFullPath(args.FirstOrDefault(arg => !arg.StartsWith("--", StringComparison.Ordinal)) ?? Path.Combine("tests", "GitBinder.UiSmoke", "artifacts"));
         Directory.CreateDirectory(SmokeApp.OutputDirectory);
         Trace.Listeners.Add(new TextWriterTraceListener(Path.Combine(SmokeApp.OutputDirectory, "avalonia.log")));
         Trace.AutoFlush = true;
-        return AppBuilder.Configure<SmokeApp>().UsePlatformDetect().WithInterFont().LogToTrace()
-            .StartWithClassicDesktopLifetime([], ShutdownMode.OnExplicitShutdown);
+        var builder = AppBuilder.Configure<SmokeApp>().UsePlatformDetect().WithInterFont().LogToTrace();
+        if (args.Contains("--direct-composition"))
+            builder.With(new Win32PlatformOptions
+            {
+                CompositionMode = [Win32CompositionMode.DirectComposition, Win32CompositionMode.RedirectionSurface],
+            });
+        return builder.StartWithClassicDesktopLifetime([], ShutdownMode.OnExplicitShutdown);
     }
 }
 
@@ -32,6 +43,9 @@ public sealed partial class SmokeApp : App
 {
     public static string OutputDirectory { get; set; } = string.Empty;
     public static bool ScreenshotsOnly { get; set; }
+    public static bool ResourceProfile { get; set; }
+    public static bool DragOnly { get; set; }
+    public static bool SuppressTestAutomation { get; set; }
     private readonly List<string> _checks = [];
     private IClassicDesktopStyleApplicationLifetime _desktop = null!;
     private MainWindow _window = null!;
@@ -52,12 +66,31 @@ public sealed partial class SmokeApp : App
             Check(App.Services is null, "启动未调用真实 CompositionRoot");
             _fixture = new SmokeFixture(OutputDirectory);
             await _fixture.LoadAsync();
-            _window = new MainWindow { DataContext = _fixture.Main, Width = 1180, Height = 780, ShowInTaskbar = false };
+            _window = SuppressTestAutomation ? new ResourceDiagnosticMainWindow() : new MainWindow();
+            _window.DataContext = _fixture.Main;
+            _window.Width = 1180;
+            _window.Height = 780;
+            _window.ShowInTaskbar = false;
             _desktop.MainWindow = _window;
             _window.Show();
             await SettleAsync();
+            if (DragOnly)
+            {
+                await VerifyDragPreviewAsync();
+                Check(App.Services is null, "拖动专项验证未建立真实服务容器");
+                return;
+            }
+            if (ResourceProfile)
+            {
+                await VerifyResourceUsageAsync();
+                Check(App.Services is null, "资源验证结束未建立真实 CompositionRoot");
+                Check(_fixture.Transfer.CloneCount == 0 && _fixture.Transfer.PullCount == 0 && _fixture.Transfer.TestCount == 0,
+                    "资源验证未触发克隆、拉取或认证（包括 Fake）");
+                return;
+            }
             var tagline = _window.GetVisualDescendants().OfType<TextBlock>().Single(text =>
                 text.Text == _fixture.Localization.GetString("Ui.Navigation.Tagline"));
+            ProjectsView? retainedProjectsView = null;
             foreach (var culture in new[] { "zh-CN", "en-US" })
             {
                 await _fixture.Localization.SetCultureAsync(new CultureInfo(culture));
@@ -76,6 +109,21 @@ public sealed partial class SmokeApp : App
                         await SettleAsync();
                         Capture(_window, $"{culture}-{width}-{nav.Key[4..]}");
                         Check(_window.GetVisualDescendants().OfType<UserControl>().Any(), $"页面渲染 {culture} {width} {nav.Key}");
+                        if (nav.Key == "Nav.Projects")
+                        {
+                            var view = _window.GetVisualDescendants().OfType<ProjectsView>().Single();
+                            var list = view.GetVisualDescendants().OfType<ProjectListBox>().Single();
+                            Check(list.StyleKey == typeof(ListBox) && list.Template is not null,
+                                "项目列表继承标准主题且已应用模板");
+                            Check(list.Bounds.Width > 0 && list.Bounds.Height > 0,
+                                "项目列表具有可见视口");
+                            Check(list.GetVisualDescendants().OfType<TextBlock>().Any(text =>
+                                _fixture.Projects.FilteredItems.Any(item => item.Name == text.Text)),
+                                "项目卡片名称实际生成，不能只有项目计数");
+                            Check(retainedProjectsView is null || ReferenceEquals(retainedProjectsView, view),
+                                "往返导航复用项目视图");
+                            retainedProjectsView = view;
+                        }
                     }
                     await _fixture.Main.OpenSettingsCommand.ExecuteAsync(null);
                     await SettleAsync();
@@ -99,6 +147,7 @@ public sealed partial class SmokeApp : App
                 await VerifyPlatformEditorAsync();
                 await VerifyCloneEditorAsync();
                 await VerifyProjectConcurrencyAsync();
+                await VerifyDragPreviewAsync();
                 await VerifyPageEscapeAsync();
             }
             Check(App.Services is null, "验证结束仍未建立真实服务容器");

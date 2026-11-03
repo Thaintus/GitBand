@@ -127,9 +127,8 @@ public sealed class GlobalModeService
     }
 
     /// <summary>
-    /// 应用启动时重新应用当前有效账号。
-    /// 全局模式开启时应用全局账号；关闭时也需重新应用已有绑定，
-    /// 以便升级后旧仓库获得最新的认证隔离配置。
+    /// 显式重新应用当前有效账号的兼容入口，桌面启动不调用。
+    /// 全局模式开启时应用全局账号；关闭时重新应用已有绑定。
     /// </summary>
     public async Task<Result> EnsureAppliedAsync(CancellationToken ct = default)
     {

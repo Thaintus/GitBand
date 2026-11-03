@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:GitBinder.Desktop.ViewModels"
+             xmlns:controls="using:GitBinder.Desktop.Controls"
              xmlns:loc="using:GitBinder.Desktop.Localization"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -39,9 +40,8 @@
             </Button>
         </Grid>
 
-        <!-- 平台列表 -->
-        <ScrollViewer Grid.Row="2" Margin="0,14,0,0" HorizontalScrollBarVisibility="Disabled">
-            <StackPanel>
+        <!-- 星号行提供有限视口，只生成可见范围内的平台卡片。 -->
+        <Grid Grid.Row="2" Margin="0,14,0,0" RowDefinitions="Auto,Auto,*">
                 <Border Classes="card" Padding="32" IsVisible="{Binding !HasItems}">
                     <StackPanel Spacing="16" HorizontalAlignment="Center" MaxWidth="360">
                         <Border Width="56" Height="56" CornerRadius="16" Background="{DynamicResource PrimarySoftBrush}" HorizontalAlignment="Center">
@@ -52,16 +52,40 @@
                         <Button Content="{loc:Loc Common.Add.New}" Command="{Binding NewCommand}" Classes="secondary" HorizontalAlignment="Center" />
                     </StackPanel>
                 </Border>
-                <Border Classes="card" Padding="32" IsVisible="{Binding HasNoMatches}">
+                <Border Grid.Row="1" Classes="card" Padding="32" IsVisible="{Binding HasNoMatches}">
                     <StackPanel Spacing="8" HorizontalAlignment="Center" MaxWidth="360">
                         <TextBlock Classes="section-title" Text="{loc:Loc Common.Search.NoResults}" TextAlignment="Center" TextWrapping="Wrap" />
                         <TextBlock Classes="page-description" Text="{loc:Loc Common.Search.NoResultsHint}" TextAlignment="Center" />
                     </StackPanel>
                 </Border>
-                <ItemsControl ItemsSource="{Binding FilteredItems}">
-                    <ItemsControl.ItemTemplate>
+                <ListBox Grid.Row="2" ItemsSource="{Binding FilteredItems}" controls:ListReorder.Scope="Platforms"
+                         Background="Transparent" BorderThickness="0" Padding="0"
+                         AutoScrollToSelectedItem="False" Focusable="False" KeyboardNavigation.TabNavigation="Continue"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto">
+                    <ListBox.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <VirtualizingStackPanel />
+                        </ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                    <ListBox.ItemContainerTheme>
+                        <ControlTheme TargetType="ListBoxItem">
+                            <Setter Property="Padding" Value="0" />
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="Focusable" Value="False" />
+                            <Setter Property="Template">
+                                <ControlTemplate>
+                                    <ContentPresenter Name="PART_ContentPresenter"
+                                                      Content="{TemplateBinding Content}"
+                                                      ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                      HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}" />
+                                </ControlTemplate>
+                            </Setter>
+                        </ControlTheme>
+                    </ListBox.ItemContainerTheme>
+                    <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <Border Classes="card list-card" Margin="0,0,0,10">
+                            <Border Classes="card list-card reorder-item" Margin="0,0,0,10"
+                                    controls:ListReorder.IsItem="True" ToolTip.Tip="{loc:Loc Common.Reorder.Hint}">
                                 <Grid>
                                     <Grid Margin="16,18,44,18" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
                                         <Border Width="36" Height="36" CornerRadius="10" Background="{DynamicResource PrimarySoftBrush}" VerticalAlignment="Center">
@@ -99,10 +123,8 @@
                                 </Grid>
                             </Border>
                         </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-
-            </StackPanel>
-        </ScrollViewer>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+        </Grid>
     </Grid>
 </UserControl>

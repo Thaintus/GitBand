@@ -7,6 +7,9 @@ internal static class StringsEnUs
 {
     public static readonly IReadOnlyDictionary<string, string> Resources = new Dictionary<string, string>
     {
+        ["Common.Reorder.Hint"] = "Hold a card name or empty area for half a second, then drag to preview its new position. Release to save; Escape restores the order.",
+        ["Common.Reorder.GroupsHint"] = "Hold a custom group for half a second, then drag to reorder. All projects and Ungrouped stay at the top.",
+        ["Common.Reorder.Failed"] = "Could not finish reordering. Reopen this page to check the saved order and try again.",
         ["BINDING_INCOMPLETE"] = "The project or bound account no longer exists. Reopen Projects and check the binding.",
         ["TEST_FAILED"] = "Connection test did not complete. Check Git, the remote URL, and authentication for the effective account.",
         ["PROJECT_PROTOCOL_SWITCH_UNSUPPORTED"] = "The account authentication does not match the remote protocol, and this URL cannot be converted safely. Enter the corresponding URL provided by your platform in Edit Remote.",
@@ -287,6 +290,20 @@ internal static class StringsEnUs
         ["Projects.RepositoryMissing"] = "Repository Missing",
 
         ["Settings.Title"] = "Settings",
+        ["Projects.RefreshConfiguration"] = "Read current configuration and sync the recorded binding",
+        ["Projects.RefreshConfigurationRunning"] = "Reading configuration and matching accounts…",
+        ["BINDING_REFRESH_NO_MATCH"] = "No enabled account matches this repository's name, email and host. The previous binding is unchanged. Check account settings or select an account manually.",
+        ["BINDING_REFRESH_AMBIGUOUS"] = "Multiple accounts match this repository. Select one manually. The previous binding is unchanged.",
+        ["BINDING_REFRESH_GLOBAL_MODE"] = "Global account settings cannot identify the original project binding. Disable global mode before refreshing, or select a binding manually.",
+        ["BINDING_REFRESH_FAILED"] = "Could not synchronize the binding record. Refresh again to check its current state.",
+        ["BINDING_REFRESH_RELOAD_FAILED"] = "The account record was synchronized, but the view could not refresh. Reopen the Projects page.",
+        ["PROJECT_CONFIGURATION_READ_FAILED"] = "Could not read project configuration. Ensure the path is an accessible Git repository root and try again.",
+        ["Projects.IdentitySyncRunning"] = "Repository identity settings are syncing. You can view projects; changes and transfers will be available when syncing finishes.",
+        ["Settings.About"] = "About",
+        ["Settings.ApplicationVersion"] = "Version number",
+        ["Settings.Project"] = "Project URL",
+        ["Settings.OpenProject"] = "Open the GitHub project in your browser",
+        ["Settings.OpenProjectFailed"] = "Could not open your browser. Please visit: {0}",
         ["Settings.Git"] = "Git",
         ["Settings.RealGit"] = "Real Git Path",
         ["Settings.GitVersion"] = "Git Version",

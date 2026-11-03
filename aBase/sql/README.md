@@ -10,6 +10,7 @@
 - `bindings`        绑定（Project → Account 一对一）
 - `repository_snapshots`  仓库配置快照（用于回滚）
 - `settings`        设置（键值存储，含 language、global_mode、platforms.seeded）
+- 展示排序复用 `settings`：`ui.order.accounts`、`ui.order.platforms`、`ui.order.projects`、`ui.order.groups` 分别保存对应列表 ID 的 JSON 数组。按需首次拖动写入；旧库无需建表、补列或迁移。只包含 GUID，不保存凭据和 Git 配置；固定分组入口不写入。
 - `operation_logs`  操作日志（脱敏审计）
 
 增量迁移：

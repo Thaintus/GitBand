@@ -318,7 +318,7 @@ GitBinder 不复制 Repository 内容，普通目录登记/加载时不初始化
 
 ### Remote 协议切换
 
-项目页面加载时经 `ProjectService.RefreshMetadataAsync` 读取本地 origin，更新缓存协议和主机，不联网、不改 Git 配置。读取失败时保留缓存并提示，未配置 origin 与读取失败分别使用空字符串与 null 表示；禁止将含 HTTP 用户信息的地址自动写入缓存。项目仓储使用显式列名保持映射稳定。
+项目页面先显示数据库中已保存的项目和分组，再经 `ProjectService.RefreshMetadataAsync` 读取本地 origin，更新缓存协议和主机，不联网、不改 Git 配置。元数据每批最多并行刷新 4 个项目，SQLite/Git/同步账号解析在后台执行，卡片回填及项目占用释放回到 UI 上下文；快速往返页面复用尚未完成的加载，完成后再次进入仍读取最新元数据。读取失败时保留缓存并提示，单行刷新异常不阻止其他仓库更新；未配置 origin 与读取失败分别使用空字符串与 null 表示，禁止将含 HTTP 用户信息的地址自动写入缓存。项目仓储使用显式列名保持映射稳定。
 
 普通目录后续初始化 Git 时，页面刷新补齐 GitDir、分支和 origin 等元数据，保留原 ID、分组且不自动绑定；自动识别要求仓库根目录等于已登记目录，不会将普通目录自动替换为后来出现的父级仓库。登记或明确修改路径时，Git 项目仍解析真实根目录并按平台路径规则去重；目录不存在与已登记仓库失效分别反馈。
 
@@ -1477,7 +1477,7 @@ Snapshot
 
 除 `user.name`、`user.email` 外，还需以 Global Account 覆盖全局 `core.sshCommand` 与 `credential.helper`：SSH 禁止使用系统 Agent/默认 Key 回退，HTTPS 重置已有 Helper 后仅调用带账号 Id 的 GitBinder Helper。关闭时一并恢复进入全局模式前快照中的上述配置。
 
-应用启动时，全局模式关闭也要重新应用所有已登记项目的 Binding；这是认证配置的升级补写步骤，确保旧绑定获得当前的 SSH/HTTPS 无回退规则，而不要求用户逐个重新保存绑定。
+应用启动仅读取已保存的账号、绑定及全局模式状态，不重新应用仓库或全局 Git 配置，也不自动修复外部工具改动的绑定身份。配置重应用由用户明确保存绑定、切换全局模式或编辑账号等操作触发；旧配置不会在启动时自动升级补写。
 
 关闭：
 
@@ -1682,6 +1682,8 @@ Self-contained
 ---
 
 # 38. Windows 构建
+
+Windows 发布使用自包含的共享目录布局：Desktop 与 Credential Helper 隔离发布后按同名文件 SHA256 合并到 app，分别保留 EXE/DLL/deps/runtimeconfig，只保留一套随包运行时；不向用户增加 .NET 安装要求。禁用自有调试符号输出，合并及安装文件规则均排除 PDB，并清理 deps 中原生 PDB 条目；保持不裁剪、不 AOT。1.2.12 已完成生产发布及产物核对，未作启动/安装验收，基线与核验规则见 [Windows 打包说明](WINDOWS_PACKAGING.md)。
 
 Runtime Identifier：
 
@@ -2126,15 +2128,24 @@ Self-contained
 ## 桌面结果通知与 Windows 安装图标
 
 - 项目页的单项绑定、测试、解绑、地址/路径保存、分组归属、移除与拉取使用项目 ID 占用，直到目标项目刷新完成才释放。共享异步行命令允许跨项目并发，同项目仍互斥；每行独立展示忙碌、进度和可取消状态，单项任务不占用页面的批量进度与 CTS。
-- 全量载入串行合并并保留既有 ProjectItemViewModel，跳过被其他操作占用的行；目标刷新更新原行，不重建全部卡片，不清除其他行的地址/路径草稿。账号及分组程序回填标记防止 SelectionChanged 再次发起写入。HasPendingOperations 聚合所有行占用与页面任务，不使用单个共享命令的 IsRunning 判断并发任务已全部结束。
+- 全量载入和操作后的目标刷新由同一门禁协调，保留既有 ProjectItemViewModel，跳过被其他操作占用的行；后台批量刷新保留每项目占用，直到所有 worker 收尾后才释放。目标刷新更新原行，不重建全部卡片，不清除其他行的地址/路径草稿。过滤后的条目引用及顺序相同时不替换 ItemsSource；仅页面忙碌状态真正变化时向全部行回填可用状态。账号及分组程序回填标记防止 SelectionChanged 再次发起写入。HasPendingOperations 聚合所有行占用与页面任务，不使用单个共享命令的 IsRunning 判断并发任务已全部结束。
+- 项目卡片使用有界 `ProjectListBox` / `VirtualizingStackPanel`，仅创建可见区域及框架缓存范围内的控件。专用 ListBox 将 `NeedsContainerOverride` 的 recycleKey 设为 null，保留虚拟化而不跨行复用容器，避免旧 ComboBox 选项在 DataContext 切换过程中触发其他项目的账号/分组写入；项目 ViewModel 与编辑草稿仍由页面持有。
+- 展示排序由 Application.Settings.ListOrderService 通过已有 ISettingsRepository 保存四组 GUID 数组（ui.order.accounts/platforms/projects/groups），无需 Schema 迁移；仅主列表/分组下拉框使用，不参与有效账号决策。加载时按 ID 合并历史排序，忽略已删除 ID，新条目依原查询顺序追加；损坏 JSON 回退查询顺序。SaveVisibleAsync 校验原可见顺序与全量子序、预览成员一致且无重复，将最终预览按原可见槽位投影到全量后单次 UPSERT；兼容 MoveAsync 复用该入口。
+- Desktop.ListOrderPreview<T> 持有原始条目引用和最后预览顺序，拖动期间仅对 FilteredItems/Groups 执行 ObservableCollection.Move；松开通过 IListOrderHost 保存原快照和最终预览，成功后再同步 Items/分组下拉。取消或写入失败还原展示顺序；若集合已被外部筛选/加载替换则不恢复过期对象。会话检查源条目、加载/操作门禁、项目分组及搜索上下文。ListReorder 附加行为负责 500ms 长按、指针捕获、主色预览占位、边缘滚动及取消；命中在 Loaded 阶段等待布局后处理，并按实际鼠标/滚动位移采样，防止布局变动导致静止鼠标反复换位。松开只确认最后展示顺序；源卡片移动到鼠标下仍为有效落点。保留条目与列表实例，不新增 Git 查询或写入。
+- `ProjectListBox.StyleKeyOverride` 必须返回 `typeof(ListBox)` 才能取得 Fluent 的列表主题及模板；只设置项目容器主题不能代替列表本身的主题。ViewLocator 按项目 ViewModel 弱引用缓存项目视图，切回页面时复用其控件树。用户明确触发的全局身份操作在后台执行，UI 保留门禁申请/释放和属性回填；操作后在门禁内只重读展示缓存，不再附带全仓库元数据扫描。启动只读历史记录，不执行身份重应用。
+- 项目展示通过 `EffectiveAccountResolver.CaptureDisplaySnapshot` 复用本轮已读取账号及一次采集的全局状态，各行传入本次读取的绑定 ID，内部仍复用同一解析器规则；不逐行调用同步数据库适配器，快照不跨轮保留，实际认证/绑定/拉取继续使用实时解析入口。分组计数一次遍历累加，分组列表和下拉选项相同时保留原集合。账号列表条目不订阅与自身字段无关的语言事件，项目条目移除时解除其语言事件订阅。总览和账号页面的数据库读取在后台完成，UI 仅回填结果；各页面加载门禁继续防止旧请求覆盖新状态。
+- `InitializeAsync` 只读取顶栏账号、通过 `LoadStoredAsync` 读取登记的项目与分组，再读取总览统计；不调用 `EnsureAppliedAsync`，不为启动取得身份写入外部门禁，不启动仓库 Git 扫描或配置重写。登记信息表示用户在软件中保存的状态，不保证与外部工具修改后的仓库配置实时一致。
+- 项目名后的 RefreshConfigurationCommand 使用当前项目占用，后台读取元数据及 user.name/user.email，调用 BindingService.SynchronizeRecordedBindingAsync 将唯一匹配的启用账号同步到软件绑定记录，并只读重载目标行；不在卡片追加配置说明。匹配按姓名、邮箱和已知项目主机，零匹配/多匹配弹窗并保留记录；全局覆盖下只有已记录同一账号时可直接回填，否则提示而不反推原项目绑定。ProjectService.ReadCurrentIdentityAsync 核实真实根目录后调用 IGitService.GetCurrentIdentityAsync，两条 config --null --get 保留全局继承和缺失/空值，不读取原始凭据链。只同步软件记录、保留最早解绑快照，不调用 BindAsync 或任何 Git Apply/Restore，不执行远程认证；匹配不是 SSH/HTTPS 认证账号的验证。
+- 绑定账号下拉框的 SelectedItem 显式使用 OneWay 展示，用户选择由 SelectionChanged 进入既有改绑用例；控件更换 ItemsSource 时产生的临时空值不能写回 VM。快照回填先通知 AvailableAccounts，再按账号 ID 从新候选列表选择同一实例并通知 SelectedBindingAccount，最后更新其他派生展示。失败/拒绝/进行中的选择恢复均强制通知，避免单向绑定下 VM 值相同但控件仍停留在错误选项。已绑定的停用账号仍纳入该项目的展示选项，其他停用账号不加入可选列表，实际账号可用性及有效账号回退仍由原服务规则决定。
 - 分组结构修改、分组拉取和全局身份重应用保留跨项目冲突保护；全局模式入口与项目操作共享页面门禁，避免操作中切换有效账号。搜索、选择分组、导航及打开已登记目录不受单项忙碌状态影响；Escape 可取消其他空闲行的编辑，但不能关闭仍有后台操作的主窗口。
-- 启动身份重应用、账号保存/设默认/删除也通过相同外部门禁，覆盖持久化、身份同步及项目刷新；不能在项目传输中替换生效账号的凭据。账号列表刷新后发出只读通知，主窗口串行重读顶栏账号，不再次应用全局配置；禁止删除当前启用的全局账号。
+- 账号保存/设默认/删除通过相同外部门禁，覆盖持久化、显式身份同步及项目刷新；不能在项目传输中替换生效账号的凭据。账号列表刷新后发出只读通知，主窗口串行重读顶栏账号，不再次应用全局配置；禁止删除当前启用的全局账号。启动不参与身份重应用。
 - ProjectService 的登记和路径更新在最终路径去重与写入之间共用短时异步门禁。耗时元数据读取位于锁外，锁内重新核对目标路径和原记录，避免两个项目同时登记同一路径；该门禁不串行化不同项目拉取。
 
 - ViewModelBase.SetNotice 统一发布操作结果，经 DialogHelper 的 UI 调度与串行队列显示 MessageDialog；不持久化消息，不改变业务错误码。账号编辑通知关联对应编辑窗口，应用退出期间的窗口异常不会向外传播。
 - 项目 OperationProgress 与结果 Feedback 分离；批量汇总包含逐项结果，传输后的列表刷新错误合并到同一结果。MessageDialog 与 ConfirmationDialog 使用 SelectableTextBlock + ScrollViewer，提供原生文本选择及 Ctrl+C；不使用只读 TextBox、复制全部按钮或额外剪贴板写入逻辑。通知队列、消息来源及错误脱敏规则不变。
 - Desktop 工程通过 ApplicationIcon 嵌入 Windows 原生图标；Inno Setup 的 UninstallDisplayIcon 显式指向安装目录的 gitbinder.ico。托盘、快捷方式和安装项复用已有图标，不变更 AppId 或用户数据路径。
 - 发布脚本逐项检查 dotnet publish 退出码，避免主程序失败后继续生成不完整安装包；清理仅限已校验的仓库内 build/publish 临时产物。
+- 资源优化：账号/平台使用有界虚拟化 ListBox，按 ID 复用行并只通知变化字段；Main 导航合并进行中的相同页读取，首次总览读取统一由启动入口负责，显式写入后刷新保持独立。拖动预览改为事件驱动，仅边缘可滚动时保留 30ms 定时器；源卡片从已实现容器定位。PATH 成功定位缓存最多 5 秒且每次复核命中文件，GitDir 用一次 --absolute-git-dir 获取；Release 不启用框架 Trace。发布生成包外 payload-manifest.json；当前未测优化后内存/功耗，具体约束见 [性能说明](PERFORMANCE.md)。
 
 ## SSH 连接配置兼容与诊断
 

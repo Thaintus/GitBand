@@ -80,6 +80,42 @@ public sealed class EffectiveAccountResolver
 
         return EffectiveReason.Default;
     }
+    /// <summary>页面展示复用本轮账号和全局状态，实际认证仍使用实时解析入口。</summary>
+    public DisplaySnapshot CaptureDisplaySnapshot(IReadOnlyList<Account> accounts)
+    {
+        var enabled = _globalModeState.IsEnabled;
+        return new DisplaySnapshot(enabled, enabled ? _globalModeState.GlobalAccountId : null, accounts);
+    }
+
+    public sealed class DisplaySnapshot
+    {
+        private readonly IGlobalModeState _state;
+        private readonly IAccountReader _accounts;
+        internal DisplaySnapshot(bool enabled, Guid? globalId, IReadOnlyList<Account> accounts)
+        {
+            _state = new DisplayState(enabled, globalId);
+            _accounts = new DisplayAccounts(accounts);
+        }
+        public (Account? Account, EffectiveReason Reason) Resolve(Project project, Guid? boundAccountId)
+        {
+            // 使用该项目本次读取的绑定，不能复用整轮开始前的旧绑定。
+            var resolver = new EffectiveAccountResolver(_state, new DisplayBinding(project.Id, boundAccountId), _accounts);
+            return (resolver.Resolve(project), resolver.ResolveReason(project));
+        }
+    }
+
+    private sealed record DisplayState(bool IsEnabled, Guid? GlobalAccountId) : IGlobalModeState;
+    private sealed record DisplayBinding(Guid ProjectId, Guid? AccountId) : IBindingReader
+    {
+        public Guid? GetAccountIdByProject(Guid projectId) => projectId == ProjectId ? AccountId : null;
+    }
+    private sealed class DisplayAccounts(IReadOnlyList<Account> accounts) : IAccountReader
+    {
+        private readonly Dictionary<Guid, Account> _byId = accounts.ToDictionary(account => account.Id);
+        private readonly Account? _default = accounts.FirstOrDefault(account => account.IsDefault && account.Enabled);
+        public Account? GetById(Guid id) => _byId.GetValueOrDefault(id);
+        public Account? GetDefault() => _default;
+    }
 }
 
 /// <summary>有效账号来源。</summary>

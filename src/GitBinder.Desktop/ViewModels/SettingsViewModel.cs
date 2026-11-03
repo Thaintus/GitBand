@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
+using System.Reflection;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GitBinder.Application.Common;
@@ -46,6 +47,25 @@ public partial class SettingsViewModel : ViewModelBase
     private bool _closeToTrayOnClose = DesktopSettingKeys.DefaultCloseToTrayOnClose;
 
     public ObservableCollection<CultureOption> Languages { get; } = [];
+
+    /// <summary>读取桌面程序集的发布版本，保留预发布后缀，隐藏构建提交哈希。</summary>
+    public string ApplicationVersion { get; } = ReadApplicationVersion();
+
+    public Uri ProjectUri { get; } = new("https://github.com/thaintus/GitBand");
+
+    public string ProjectUrl => ProjectUri.AbsoluteUri;
+
+    internal void ReportProjectOpenFailed()
+        => DialogHelper.Notify(_localization.GetString("Settings.OpenProjectFailed", ProjectUrl), this);
+
+    private static string ReadApplicationVersion()
+    {
+        var assembly = typeof(SettingsViewModel).Assembly;
+        var version = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        return !string.IsNullOrWhiteSpace(version)
+            ? version.Split('+')[0]
+            : assembly.GetName().Version?.ToString(3) ?? string.Empty;
+    }
 
     public SettingsViewModel(
         IApplicationDataPath dataPath,

@@ -1,5 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.Input;
+using GitBinder.Application.Settings;
 using GitBinder.Application.Projects;
 
 namespace GitBinder.Desktop.ViewModels;
@@ -8,7 +10,7 @@ public partial class ProjectsViewModel
 {
     private readonly ProjectGroupService _groupService;
 
-    [ObservableProperty] private IReadOnlyList<ProjectGroupItemViewModel> _groups = [];
+    [ObservableProperty] private ObservableCollection<ProjectGroupItemViewModel> _groups = [];
     [ObservableProperty] private ProjectGroupItemViewModel? _selectedGroup;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanManageProjects))]
@@ -31,29 +33,41 @@ public partial class ProjectsViewModel
 
     private async Task ReloadGroupsCoreAsync()
     {
-        var definitions = await _groupService.GetAllAsync();
-        var membership = await _groupService.GetMembershipsAsync();
+        var (definitions, membership) = await Task.Run(async () =>
+        {
+            var all = await _groupService.GetAllAsync();
+            if (_listOrder is not null)
+                all = await _listOrder.ApplyAsync(ListOrderScope.Groups, all, group => group.Id);
+            return (all, await _groupService.GetMembershipsAsync());
+        });
         var selectedId = SelectedGroup?.Id;
         var selectedAll = SelectedGroup?.IsAll ?? true;
         // 正在变更分组的条目保留已接受的选择，不能被较早的数据库快照回填
         var visibleMembership = Items.ToDictionary(item => item.Project.Id,
             item => item.IsAssigningGroup ? item.GroupId
                 : membership.TryGetValue(item.Project.Id, out var id) ? (Guid?)id : null);
+        var groupCounts = new Dictionary<Guid, int>();
+        var ungroupedCount = 0;
+        foreach (var groupId in visibleMembership.Values)
+        {
+            if (groupId is not Guid id) { ungroupedCount++; continue; }
+            groupCounts[id] = groupCounts.GetValueOrDefault(id) + 1;
+        }
         var ungrouped = new ProjectGroupItemViewModel(null, _localization.GetString("Groups.Ungrouped"),
-            Items.Count(p => visibleMembership[p.Project.Id] is null), false);
+            ungroupedCount, false);
         var groups = new List<ProjectGroupItemViewModel>
         {
             new(null, _localization.GetString("Groups.All"), Items.Count, true),
         };
         if (ungrouped.Count > 0) groups.Add(ungrouped);
         groups.AddRange(definitions.Select(g => new ProjectGroupItemViewModel(g.Id, g.Name,
-            Items.Count(p => visibleMembership[p.Project.Id] == g.Id), false)));
+            groupCounts.GetValueOrDefault(g.Id), false)));
         var choices = new List<ProjectGroupItemViewModel> { ungrouped };
         choices.AddRange(groups.Where(g => g.CanEdit));
         foreach (var item in Items)
             if (!item.IsAssigningGroup) item.SetGroups(choices, visibleMembership[item.Project.Id]);
-        Groups = groups;
-        SelectedGroup = groups.FirstOrDefault(g => g.IsAll == selectedAll && g.Id == selectedId) ?? groups[0];
+        ListOrdering.Synchronize(Groups, groups);
+        SelectedGroup = Groups.FirstOrDefault(g => g.IsAll == selectedAll && g.Id == selectedId) ?? Groups[0];
         ApplyFilter();
     }
 
@@ -211,6 +225,7 @@ public partial class ProjectItemViewModel
 
     internal void SetGroups(IReadOnlyList<ProjectGroupItemViewModel> choices, Guid? groupId)
     {
+        if (GroupId == groupId && GroupChoices.SequenceEqual(choices)) return;
         var wasRestoring = IsRestoringSelection;
         IsRestoringSelection = true;
         try { GroupId = groupId; GroupChoices = choices; RestoreGroup(); }

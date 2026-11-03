@@ -19,6 +19,21 @@ public sealed partial class SmokeApp
         vm.SelectedGroup = vm.Groups.Single(group => group.IsAll);
         await SettleAsync();
         var view = _window.GetVisualDescendants().OfType<ProjectsView>().Single();
+        await vm.LoadStoredAsync();
+        await SettleAsync();
+        var accountChoices = view.GetVisualDescendants().OfType<ComboBox>()
+            .Where(combo => combo.Classes.Contains("project-binding-account")).ToList();
+        Check(accountChoices.Count > 0, "账号回填检查找到可见的真实下拉框");
+        foreach (var combo in accountChoices)
+        {
+            if (combo.DataContext is not ProjectItemViewModel { BoundAccount: { } bound } row) continue;
+            Check(combo.SelectedItem is GitBinder.Domain.Accounts.Account selected && selected.Id == bound.Id,
+                $"刷新后绑定账号下拉框实际选中已登记账号：{row.Name}");
+            Check(ReferenceEquals(combo.SelectedItem, row.SelectedBindingAccount),
+                $"控件选项与 VM 使用同一账号实例：{row.Name}");
+            Check(combo.GetVisualDescendants().OfType<TextBlock>().Any(text => text.Text == bound.DisplayAlias),
+                $"绑定账号实际显示别名：{row.Name}");
+        }
         var first = vm.Items.Single(item => item.Name == "gitbinder-ui");
         var second = vm.Items.Single(item => item.Name == "service-api");
         var originalRemote = second.Project.OriginUrl;

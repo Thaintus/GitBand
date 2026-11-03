@@ -7,6 +7,9 @@ internal static class StringsZhCn
 {
     public static readonly IReadOnlyDictionary<string, string> Resources = new Dictionary<string, string>
     {
+        ["Common.Reorder.Hint"] = "按住卡片空白处或名称约半秒后拖动，实时预览新位置；松开保存，Escape 还原。",
+        ["Common.Reorder.GroupsHint"] = "按住自建分组约半秒后拖动排序；全部项目、未分组保持置顶。",
+        ["Common.Reorder.Failed"] = "未能完成排序，请重新进入页面核对顺序后重试。",
         ["BINDING_INCOMPLETE"] = "项目或绑定账号已不存在，请重新进入项目页检查绑定。",
         ["TEST_FAILED"] = "连接测试未完成，请检查 Git、项目地址和当前生效账号的认证配置。",
         ["PROJECT_PROTOCOL_SWITCH_UNSUPPORTED"] = "当前账号的认证方式与项目地址协议不匹配，此地址无法安全自动转换。请在“修改地址”中填写平台提供的对应协议地址。",
@@ -296,6 +299,20 @@ internal static class StringsZhCn
 
         // Settings
         ["Settings.Title"] = "设置",
+        ["Projects.RefreshConfiguration"] = "读取当前配置并同步绑定账号记录",
+        ["Projects.RefreshConfigurationRunning"] = "正在读取配置并匹配账号…",
+        ["BINDING_REFRESH_NO_MATCH"] = "未找到与当前仓库姓名、邮箱及主机匹配的启用账号，原绑定保持不变。请检查账号设置或手动选择账号。",
+        ["BINDING_REFRESH_AMBIGUOUS"] = "多个账号与当前仓库配置相符，无法确定绑定账号。请手动选择，原绑定保持不变。",
+        ["BINDING_REFRESH_GLOBAL_MODE"] = "当前为全局账号配置，无法据此确定项目原绑定。请关闭全局模式后刷新，或手动选择绑定账号。",
+        ["BINDING_REFRESH_FAILED"] = "同步绑定账号记录失败，请重新刷新核对。",
+        ["BINDING_REFRESH_RELOAD_FAILED"] = "账号记录已同步，但界面刷新失败，请重新进入项目页查看。",
+        ["PROJECT_CONFIGURATION_READ_FAILED"] = "读取项目配置失败。请确认项目目录是可访问的独立 Git 仓库后重试。",
+        ["Projects.IdentitySyncRunning"] = "正在同步仓库身份配置。项目列表可查看，同步完成后可执行修改和传输。",
+        ["Settings.About"] = "关于",
+        ["Settings.ApplicationVersion"] = "版本号",
+        ["Settings.Project"] = "项目地址",
+        ["Settings.OpenProject"] = "在浏览器中打开 GitHub 项目",
+        ["Settings.OpenProjectFailed"] = "无法打开浏览器，请手动访问：{0}",
         ["Settings.Git"] = "Git",
         ["Settings.RealGit"] = "真实 Git 路径",
         ["Settings.GitVersion"] = "Git 版本",
