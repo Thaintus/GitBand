@@ -15,6 +15,19 @@ $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";
 
 $root = Split-Path -Parent $PSScriptRoot          # 仓库根目录
 $buildDir = $PSScriptRoot                         # build\ 目录
+$distDir = Join-Path $root "dist"
+$installerPath = Join-Path $distDir "GitBinder-$Version-setup.exe"
+
+# 在耗时的发布前拒绝覆盖已有版本，也保留只有校验文件的历史记录。
+if (Test-Path -LiteralPath $distDir) {
+    if ((Get-Item -LiteralPath $distDir).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "输出目录包含重解析点，停止打包：$distDir"
+    }
+    if ((Test-Path -LiteralPath $installerPath) -or
+        (Test-Path -LiteralPath "$installerPath.sha256")) {
+        throw "同版本安装包或校验文件已存在，停止打包。请使用新的版本号：$installerPath"
+    }
+}
 
 # 查找 ISCC.exe
 $iscc = $null
@@ -53,7 +66,6 @@ Write-Host "==> 步骤 2/2：编译安装包..." -ForegroundColor Cyan
 & $iscc (Join-Path $buildDir "installer.iss") "/DMyAppVersion=$Version"
 if ($LASTEXITCODE -ne 0) { throw "安装包编译失败" }
 
-$distDir = Join-Path $root "dist"
 Write-Host ""
 Write-Host "==> 打包完成！安装包输出：" -ForegroundColor Green
 Get-ChildItem $distDir -Filter "*.exe" | Select-Object Name, Length, LastWriteTime

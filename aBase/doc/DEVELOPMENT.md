@@ -53,7 +53,7 @@ dotnet test tests/GitBinder.Tests/GitBinder.Tests.csproj -c Debug --no-build
 .\build\build-installer.ps1 -Runtime win-x64
 ```
 
-输出为 `dist/GitBinder-<版本号>-setup.exe`。该入口执行发布编译和打包，**不执行单元测试**。脚本使用当前默认版本；发行新版本时应同步项目版本，通过 `-Version <x.y.z>` 指定新版本号，避免覆盖同名历史产物。
+输出为 `dist/GitBinder-<版本号>-setup.exe`。该入口执行发布编译和打包，**不执行单元测试**。脚本使用当前默认版本；若同版本安装包或校验文件已存在，会在发布前停止。发行新版本时应同步项目版本，通过 `-Version <x.y.z>` 指定新版本号。
 
 发布目录共享运行时并排除调试符号；这是包体积优化，不代表已经验证内存或功耗下降。详细发布规则、文件核对和现有验证边界见：
 

@@ -3,6 +3,7 @@
 ## 当前发布布局
 
 - 入口为 `build/build-installer.ps1 -Version <新版本号> -Runtime win-x64`，调用 `build/publish.ps1` 后用 Inno Setup 生成版本化安装包。用户明确要求打包后才能执行；此入口不运行测试，也不自动安装或启动应用。
+- 发布前检查 `dist/` 是否为重解析目录，以及目标版本的安装包或 `.sha256` 是否已存在；已有同名产物时停止，防止覆盖历史包。发行新版本需同步源码版本并指定新版本号。
 - Desktop 和 Credential Helper 分别自包含、非单文件发布到 `build/publish/desktop/` 与 `helper/`，合并至 `build/publish/app/`。安装包只收集 `app/`。两份 EXE 是各自的 apphost，与自身 DLL、deps.json 和 runtimeconfig.json 同目录；.NET 及共享 DLL/原生库只存一份，用户无需另外安装 .NET。
 - 保留 Helper 自己的 runtimeconfig，包括 InvariantGlobalization；主程序与 Helper 的运行时配置不混用。凭据助手仍位于主程序 AppContext.BaseDirectory 下，原 Git Helper 路径约定不变。移动或分发发布目录时必须保留完整目录。
 - 合并时只接受哈希相同的同名文件；不一致则停止，不以最后一次发布覆盖前一份依赖。仍打包 SkiaSharp、HarfBuzzSharp、SQLite 及 .NET 原生运行时，不按体积手工删减运行库。
